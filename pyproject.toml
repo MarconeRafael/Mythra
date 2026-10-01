@@ -1,0 +1,8 @@
+Python
+FastAPI
+Uvicorn
+Pydantic
+SQLAlchemy
+Alembic
+psycopg
+pytest
