@@ -1,0 +1,1 @@
+"""Recursos reutilizáveis pelos testes."""
