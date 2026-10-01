@@ -42,4 +42,4 @@ Coming soon.
 
 ## License
 
-MIT
+Unlicence
