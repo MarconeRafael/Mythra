@@ -197,6 +197,7 @@ class ChapterRead(ReadSchema):
     summary: str | None
     content: str | None
     status: str
+    revision: int
 
 
 class PatchSchema(BaseModel):

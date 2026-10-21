@@ -23,6 +23,6 @@ class StoryEventRepository:
 
     def list_for_story(self, story_id: UUID) -> list[StoryEvent]:
         query = select(StoryEvent).where(StoryEvent.story_id == story_id).order_by(
-            StoryEvent.occurred_at
+            StoryEvent.occurred_at, StoryEvent.sequence
         )
         return list(self.session.scalars(query))

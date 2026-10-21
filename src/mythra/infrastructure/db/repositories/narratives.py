@@ -105,4 +105,5 @@ class NarrativeRepository:
         )
 
     def update_chapter(self, record: Chapter, changes: dict[str, object]) -> Chapter:
-        return self._apply(record, changes)
+        # Toda mudança efetiva incrementa a revisão usada no lock otimista de edições.
+        return self._apply(record, {**changes, "revision": record.revision + 1})

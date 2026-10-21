@@ -9,6 +9,7 @@ from mythra.application.events.transitions import (
     STORY_ARC_UPDATED,
     TIMELINE_EVENT_UPDATED,
     TransitionRecorder,
+    UpdateTarget,
 )
 from mythra.application.narratives.ports import NarrativeStore
 from mythra.application.stories.use_cases import StoryUseCases
@@ -45,21 +46,25 @@ class NarrativeUseCases:
         self.stories.get_story(story_id)
         return self.narratives.list_timeline_events(story_id)
 
-    def update_timeline_event(
-        self, story_id: UUID, timeline_event_id: UUID, updates: dict[str, Any]
-    ) -> Any:
+    def resolve_timeline_event_update(
+        self, story_id: UUID, timeline_event_id: UUID
+    ) -> UpdateTarget:
         record = self.narratives.get_timeline_event_in_story(story_id, timeline_event_id)
         if record is None:
             raise ResourceNotFoundError("Evento de timeline não encontrado nesta história.")
-        return self.transitions.update(
-            story_id=story_id,
+        return UpdateTarget(
             record=record,
-            updates=updates,
             event_type=TIMELINE_EVENT_UPDATED,
             aggregate_type="timeline_event",
             persist=self.narratives.update_timeline_event,
             validate=_no_extra_rules,
         )
+
+    def update_timeline_event(
+        self, story_id: UUID, timeline_event_id: UUID, updates: dict[str, Any]
+    ) -> Any:
+        target = self.resolve_timeline_event_update(story_id, timeline_event_id)
+        return self.transitions.update(story_id=story_id, updates=updates, **target.as_kwargs())
 
     def create_plot_thread(self, story_id: UUID, values: dict[str, Any]) -> Any:
         self.stories.get_story(story_id)
@@ -70,21 +75,23 @@ class NarrativeUseCases:
         self.stories.get_story(story_id)
         return self.narratives.list_plot_threads(story_id)
 
-    def update_plot_thread(
-        self, story_id: UUID, plot_thread_id: UUID, updates: dict[str, Any]
-    ) -> Any:
+    def resolve_plot_thread_update(self, story_id: UUID, plot_thread_id: UUID) -> UpdateTarget:
         record = self.narratives.get_plot_thread_in_story(story_id, plot_thread_id)
         if record is None:
             raise ResourceNotFoundError("Plot thread não encontrada nesta história.")
-        return self.transitions.update(
-            story_id=story_id,
+        return UpdateTarget(
             record=record,
-            updates=updates,
             event_type=PLOT_THREAD_UPDATED,
             aggregate_type="plot_thread",
             persist=self.narratives.update_plot_thread,
             validate=_no_extra_rules,
         )
+
+    def update_plot_thread(
+        self, story_id: UUID, plot_thread_id: UUID, updates: dict[str, Any]
+    ) -> Any:
+        target = self.resolve_plot_thread_update(story_id, plot_thread_id)
+        return self.transitions.update(story_id=story_id, updates=updates, **target.as_kwargs())
 
     def create_arc(self, story_id: UUID, values: dict[str, Any]) -> Any:
         self.stories.get_story(story_id)
@@ -102,7 +109,7 @@ class NarrativeUseCases:
         self.stories.get_story(story_id)
         return self.narratives.list_arcs(story_id)
 
-    def update_arc(self, story_id: UUID, arc_id: UUID, updates: dict[str, Any]) -> Any:
+    def resolve_arc_update(self, story_id: UUID, arc_id: UUID) -> UpdateTarget:
         record = self.narratives.get_arc_in_story(story_id, arc_id)
         if record is None:
             raise ResourceNotFoundError("Arco não encontrado nesta história.")
@@ -116,15 +123,17 @@ class NarrativeUseCases:
             } | after
             StoryArcState(story_id=story_id, **merged)
 
-        return self.transitions.update(
-            story_id=story_id,
+        return UpdateTarget(
             record=record,
-            updates=updates,
             event_type=STORY_ARC_UPDATED,
             aggregate_type="story_arc",
             persist=self.narratives.update_arc,
             validate=validate,
         )
+
+    def update_arc(self, story_id: UUID, arc_id: UUID, updates: dict[str, Any]) -> Any:
+        target = self.resolve_arc_update(story_id, arc_id)
+        return self.transitions.update(story_id=story_id, updates=updates, **target.as_kwargs())
 
     def create_chapter(self, story_id: UUID, values: dict[str, Any]) -> Any:
         self.stories.get_story(story_id)
@@ -144,16 +153,18 @@ class NarrativeUseCases:
         self.stories.get_story(story_id)
         return self.narratives.list_chapters(story_id)
 
-    def update_chapter(self, story_id: UUID, chapter_id: UUID, updates: dict[str, Any]) -> Any:
+    def resolve_chapter_update(self, story_id: UUID, chapter_id: UUID) -> UpdateTarget:
         record = self.narratives.get_chapter_in_story(story_id, chapter_id)
         if record is None:
             raise ResourceNotFoundError("Capítulo não encontrado nesta história.")
-        return self.transitions.update(
-            story_id=story_id,
+        return UpdateTarget(
             record=record,
-            updates=updates,
             event_type=CHAPTER_UPDATED,
             aggregate_type="chapter",
             persist=self.narratives.update_chapter,
             validate=_no_extra_rules,
         )
+
+    def update_chapter(self, story_id: UUID, chapter_id: UUID, updates: dict[str, Any]) -> Any:
+        target = self.resolve_chapter_update(story_id, chapter_id)
+        return self.transitions.update(story_id=story_id, updates=updates, **target.as_kwargs())

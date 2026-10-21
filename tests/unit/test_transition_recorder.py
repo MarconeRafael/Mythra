@@ -36,6 +36,19 @@ class FakeEvents:
         return []
 
 
+class FakeVersions:
+    def __init__(self) -> None:
+        self.bumps = 0
+
+    def bump_state_version(self, story_id: UUID) -> int:
+        self.bumps += 1
+        return self.bumps
+
+
+def _recorder(events: FakeEvents, uow: FakeUnitOfWork) -> TransitionRecorder:
+    return TransitionRecorder(events, FakeVersions(), uow)
+
+
 @dataclass
 class Record:
     id: UUID
@@ -72,7 +85,7 @@ def test_effective_update_commits_state_and_one_event_together() -> None:
     uow, events = FakeUnitOfWork(), FakeEvents()
     record = _record()
 
-    _update(TransitionRecorder(events, uow), record, {"trust": 0.9, "status": "active"})
+    _update(_recorder(events, uow), record, {"trust": 0.9, "status": "active"})
 
     assert uow.calls == ["commit"]
     assert len(events.appended) == 1
@@ -85,7 +98,7 @@ def test_timestamps_are_serialized_as_utc_iso_strings() -> None:
     events = FakeEvents()
     new_value = datetime(2026, 3, 1, 12, tzinfo=UTC)
 
-    _update(TransitionRecorder(events, FakeUnitOfWork()), _record(), {"seen_at": new_value})
+    _update(_recorder(events, FakeUnitOfWork()), _record(), {"seen_at": new_value})
 
     assert events.appended[0]["payload"]["changes"]["seen_at"] == {
         "before": "2026-01-01T00:00:00+00:00",
@@ -97,7 +110,7 @@ def test_noop_update_neither_writes_nor_opens_a_transaction() -> None:
     uow, events = FakeUnitOfWork(), FakeEvents()
     record = _record()
 
-    result = _update(TransitionRecorder(events, uow), record, {"trust": 0.5})
+    result = _update(_recorder(events, uow), record, {"trust": 0.5})
 
     assert result is record
     assert uow.calls == [] and events.appended == []
@@ -111,7 +124,7 @@ def test_domain_rejection_happens_before_any_write() -> None:
         raise DomainRuleViolation("rejeitado")
 
     with pytest.raises(DomainRuleViolation):
-        _update(TransitionRecorder(events, uow), record, {"trust": 0.9}, reject)
+        _update(_recorder(events, uow), record, {"trust": 0.9}, reject)
 
     assert record.trust == 0.5
     assert uow.calls == [] and events.appended == []
@@ -121,7 +134,7 @@ def test_event_failure_rolls_back_instead_of_committing() -> None:
     uow = FakeUnitOfWork()
 
     with pytest.raises(RuntimeError):
-        _update(TransitionRecorder(FakeEvents(fail=True), uow), _record(), {"trust": 0.9})
+        _update(_recorder(FakeEvents(fail=True), uow), _record(), {"trust": 0.9})
 
     assert uow.calls == ["rollback"]
 
@@ -130,7 +143,7 @@ def test_create_records_null_before_for_each_populated_field() -> None:
     uow, events = FakeUnitOfWork(), FakeEvents()
     record = _record()
 
-    TransitionRecorder(events, uow).create(
+    _recorder(events, uow).create(
         story_id=uuid4(),
         values={"trust": 0.2, "status": "new", "valid_to": None},
         event_type="canonical_fact_created",
@@ -145,3 +158,24 @@ def test_create_records_null_before_for_each_populated_field() -> None:
             "status": {"before": None, "after": "new"},
         }
     }
+
+
+def test_state_version_is_bumped_once_per_effective_change_and_staging_never_commits() -> None:
+    uow, events, versions = FakeUnitOfWork(), FakeEvents(), FakeVersions()
+    recorder = TransitionRecorder(events, versions, uow)
+    record = _record()
+    kwargs: dict[str, Any] = {
+        "story_id": uuid4(),
+        "record": record,
+        "event_type": "relationship_updated",
+        "aggregate_type": "relationship",
+        "persist": _persist,
+        "validate": lambda _: None,
+    }
+
+    assert recorder.stage_update(updates={"trust": 0.5}, **kwargs) is None
+    staged = recorder.stage_update(updates={"trust": 0.9}, **kwargs)
+
+    assert staged is not None and staged.record is record
+    assert versions.bumps == 1
+    assert uow.calls == []

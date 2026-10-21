@@ -54,7 +54,7 @@ O Compose inicia PostgreSQL e API; a API executa `alembic upgrade head` antes de
 
 ## Migrations
 
-Alembic é a única ferramenta de alteração estrutural do banco. Com `MYTHRA_DATABASE_URL` configurada:
+Alembic é a única ferramenta de alteração estrutural do banco. O esquema (revisões `0001` a `0009`) e o fluxo de propostas de transição estão descritos em [docs/architecture/data-model.md](docs/architecture/data-model.md). Com `MYTHRA_DATABASE_URL` configurada:
 
 ```powershell
 alembic upgrade head

@@ -99,6 +99,16 @@ class CharacterRepository:
             )
         )
 
+    def get_knowledge_by_id_in_story(
+        self, story_id: UUID, knowledge_id: UUID
+    ) -> CharacterKnowledge | None:
+        return self.session.scalar(
+            select(CharacterKnowledge).where(
+                CharacterKnowledge.story_id == story_id,
+                CharacterKnowledge.id == knowledge_id,
+            )
+        )
+
     def update_knowledge(
         self, knowledge: CharacterKnowledge, changes: dict[str, object]
     ) -> CharacterKnowledge:

@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from mythra.infrastructure.db.models import Story, StoryPreferences
@@ -41,3 +41,13 @@ class StoryRepository:
     def get_preferences(self, story_id: UUID) -> StoryPreferences | None:
         query = select(StoryPreferences).where(StoryPreferences.story_id == story_id)
         return self.session.scalar(query)
+
+    def bump_state_version(self, story_id: UUID) -> int:
+        """Incrementa atomicamente a versão do estado canônico dentro da transação corrente."""
+        version = self.session.execute(
+            update(Story)
+            .where(Story.id == story_id)
+            .values(state_version=Story.state_version + 1)
+            .returning(Story.state_version)
+        ).scalar_one()
+        return int(version)

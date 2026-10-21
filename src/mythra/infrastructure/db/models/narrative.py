@@ -5,11 +5,13 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
     ForeignKeyConstraint,
+    Identity,
     Index,
     Integer,
     String,
@@ -17,6 +19,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -69,6 +72,9 @@ class Story(TimestampMixin, Base):
     )
     title: Mapped[str] = mapped_column(String(300), nullable=False)
     premise: Mapped[str] = mapped_column(Text, nullable=False)
+    state_version: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
 
 
 class StoryPreferences(TimestampMixin, Base):
@@ -134,6 +140,11 @@ class CharacterRelationship(TimestampMixin, Base):
         ),
         CheckConstraint("trust >= -1.0 AND trust <= 1.0", name="ck_relationship_trust_range"),
         Index("ix_relationships_story_id", "story_id"),
+        Index(
+            "ix_character_relationships_story_id_target_character_id",
+            "story_id",
+            "target_character_id",
+        ),
     )
 
     story_id: Mapped[UUID] = mapped_column(
@@ -188,7 +199,6 @@ class CharacterKnowledge(TimestampMixin, Base):
             ["story_id", "source_event_id"],
             ["story_events.story_id", "story_events.id"],
             name="fk_knowledge_event_same_story",
-            ondelete="RESTRICT",
         ),
         CheckConstraint(
             "confidence >= 0.0 AND confidence <= 1.0",
@@ -213,6 +223,13 @@ class StoryArc(TimestampMixin, Base):
     __tablename__ = "story_arcs"
     __table_args__ = (
         UniqueConstraint("story_id", "id", name="uq_story_arcs_story_id_id"),
+        UniqueConstraint(
+            "story_id",
+            "position",
+            name="uq_story_arcs_story_id_position",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
         Index("ix_story_arcs_story_position", "story_id", "position"),
     )
 
@@ -230,13 +247,32 @@ class Chapter(TimestampMixin, Base):
 
     __tablename__ = "chapters"
     __table_args__ = (
+        UniqueConstraint("story_id", "id", name="uq_chapters_story_id_id"),
+        UniqueConstraint(
+            "arc_id",
+            "position",
+            name="uq_chapters_arc_id_position",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
         ForeignKeyConstraint(
             ["story_id", "arc_id"],
             ["story_arcs.story_id", "story_arcs.id"],
             name="fk_chapters_arc_same_story",
             ondelete="CASCADE",
         ),
+        ForeignKeyConstraint(
+            ["story_id", "generation_run_id"],
+            ["generation_runs.story_id", "generation_runs.id"],
+            name="fk_chapters_generation_run_same_story",
+        ),
+        CheckConstraint("revision >= 1", name="ck_chapters_revision_positive"),
         Index("ix_chapters_story_arc_position", "story_id", "arc_id", "position"),
+        Index(
+            "ix_chapters_generation_run_id",
+            "generation_run_id",
+            postgresql_where=text("generation_run_id IS NOT NULL"),
+        ),
     )
 
     story_id: Mapped[UUID] = mapped_column(
@@ -248,13 +284,18 @@ class Chapter(TimestampMixin, Base):
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     content: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(100), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    generation_run_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
 
 
 class TimelineEvent(TimestampMixin, Base):
     """Evento temporal ordenado por instante ocorrido, não por ID de linha."""
 
     __tablename__ = "timeline_events"
-    __table_args__ = (Index("ix_timeline_events_story_occurred_at", "story_id", "occurred_at"),)
+    __table_args__ = (
+        UniqueConstraint("story_id", "id", name="uq_timeline_events_story_id_id"),
+        Index("ix_timeline_events_story_occurred_at", "story_id", "occurred_at"),
+    )
 
     story_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("stories.id", ondelete="CASCADE"), nullable=False
@@ -269,11 +310,17 @@ class PlotThread(TimestampMixin, Base):
 
     __tablename__ = "plot_threads"
     __table_args__ = (
+        UniqueConstraint("story_id", "id", name="uq_plot_threads_story_id_id"),
         CheckConstraint(
             "status IN ('open', 'resolved', 'abandoned')",
             name="ck_plot_thread_status",
         ),
         Index("ix_plot_threads_story_id", "story_id"),
+        Index(
+            "ix_plot_threads_open_story_id",
+            "story_id",
+            postgresql_where=text("status = 'open'"),
+        ),
     )
 
     story_id: Mapped[UUID] = mapped_column(
@@ -290,12 +337,21 @@ class StoryEvent(IdCreatedMixin, Base):
     __tablename__ = "story_events"
     __table_args__ = (
         UniqueConstraint("story_id", "id", name="uq_story_events_story_id_id"),
+        UniqueConstraint("sequence", name="uq_story_events_sequence"),
         Index("ix_story_events_story_occurred_at", "story_id", "occurred_at"),
+        Index(
+            "ix_story_events_aggregate_history",
+            "story_id",
+            "aggregate_type",
+            "aggregate_id",
+            "occurred_at",
+        ),
     )
 
     story_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("stories.id", ondelete="CASCADE"), nullable=False
     )
+    sequence: Mapped[int] = mapped_column(BigInteger, Identity(always=False), nullable=False)
     event_type: Mapped[str] = mapped_column(String(200), nullable=False)
     aggregate_type: Mapped[str] = mapped_column(String(100), nullable=False)
     aggregate_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)

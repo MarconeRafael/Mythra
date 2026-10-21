@@ -14,13 +14,36 @@ from mythra.infrastructure.db.models.narrative import (
     TimelineEvent,
     User,
 )
+from mythra.infrastructure.db.models.workflow import (
+    GenerationEvent,
+    GenerationRun,
+    StateTransition,
+    UserEdit,
+    ValidationResult,
+    ValidationRun,
+)
+from mythra.infrastructure.db.models.world import (
+    Faction,
+    Location,
+    Memory,
+    NarrativeRule,
+    Scene,
+)
 
 __all__ = [
+    "Chapter",
     "Character",
     "CharacterKnowledge",
     "CharacterRelationship",
-    "Chapter",
+    "Faction",
+    "GenerationEvent",
+    "GenerationRun",
+    "Location",
+    "Memory",
+    "NarrativeRule",
     "PlotThread",
+    "Scene",
+    "StateTransition",
     "Story",
     "StoryArc",
     "StoryEvent",
@@ -28,4 +51,7 @@ __all__ = [
     "StoryPreferences",
     "TimelineEvent",
     "User",
+    "UserEdit",
+    "ValidationResult",
+    "ValidationRun",
 ]

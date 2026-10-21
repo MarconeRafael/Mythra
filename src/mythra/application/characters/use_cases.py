@@ -10,7 +10,9 @@ from mythra.application.events.transitions import (
     CHARACTER_KNOWLEDGE_UPDATED,
     CHARACTER_STATE_UPDATED,
     RELATIONSHIP_UPDATED,
+    StagedChange,
     TransitionRecorder,
+    UpdateTarget,
 )
 from mythra.application.stories.use_cases import StoryUseCases
 from mythra.application.transactions import UnitOfWork, transaction
@@ -46,25 +48,32 @@ class CharacterUseCases:
         self.stories.get_story(story_id)
         return self.characters.list_for_story(story_id)
 
-    def update_character(
-        self, story_id: UUID, character_id: UUID, updates: dict[str, Any]
-    ) -> Any:
+    def resolve_character_update(self, story_id: UUID, character_id: UUID) -> UpdateTarget:
         character = self.characters.get_in_story(story_id, character_id)
         if character is None:
             raise ResourceNotFoundError("Personagem não encontrada nesta história.")
-        return self.transitions.update(
-            story_id=story_id,
+        return UpdateTarget(
             record=character,
-            updates=updates,
             event_type=CHARACTER_STATE_UPDATED,
             aggregate_type="character",
             persist=self.characters.update_character,
             validate=_no_extra_rules,
         )
 
+    def update_character(
+        self, story_id: UUID, character_id: UUID, updates: dict[str, Any]
+    ) -> Any:
+        target = self.resolve_character_update(story_id, character_id)
+        return self.transitions.update(story_id=story_id, updates=updates, **target.as_kwargs())
+
     def create_fact(self, story_id: UUID, values: dict[str, Any]) -> Any:
         self.stories.get_story(story_id)
-        return self.transitions.create(
+        with transaction(self.unit_of_work):
+            return self.stage_fact_creation(story_id, values).record
+
+    def stage_fact_creation(self, story_id: UUID, values: dict[str, Any]) -> StagedChange:
+        """Cria o fato e o evento `canonical_fact_created` na transação do chamador."""
+        return self.transitions.stage_create(
             story_id=story_id,
             values=values,
             event_type=CANONICAL_FACT_CREATED,
@@ -72,19 +81,21 @@ class CharacterUseCases:
             persist=lambda: self.characters.create_fact(story_id=story_id, values=values),
         )
 
-    def update_fact(self, story_id: UUID, fact_id: UUID, updates: dict[str, Any]) -> Any:
+    def resolve_fact_update(self, story_id: UUID, fact_id: UUID) -> UpdateTarget:
         fact = self.characters.get_fact_in_story(story_id, fact_id)
         if fact is None:
             raise ResourceNotFoundError("Fato não encontrado nesta história.")
-        return self.transitions.update(
-            story_id=story_id,
+        return UpdateTarget(
             record=fact,
-            updates=updates,
             event_type=CANONICAL_FACT_UPDATED,
             aggregate_type="story_fact",
             persist=self.characters.update_fact,
             validate=_no_extra_rules,
         )
+
+    def update_fact(self, story_id: UUID, fact_id: UUID, updates: dict[str, Any]) -> Any:
+        target = self.resolve_fact_update(story_id, fact_id)
+        return self.transitions.update(story_id=story_id, updates=updates, **target.as_kwargs())
 
     def list_facts(self, story_id: UUID) -> list[Any]:
         self.stories.get_story(story_id)
@@ -104,12 +115,22 @@ class CharacterUseCases:
         with transaction(self.unit_of_work):
             return self.characters.create_knowledge(character_id=character_id, values=values)
 
-    def update_knowledge(
-        self, story_id: UUID, character_id: UUID, fact_id: UUID, updates: dict[str, Any]
-    ) -> Any:
+    def resolve_knowledge_update(
+        self, story_id: UUID, character_id: UUID, fact_id: UUID
+    ) -> UpdateTarget:
         knowledge = self.characters.get_knowledge_in_story(story_id, character_id, fact_id)
         if knowledge is None:
             raise ResourceNotFoundError("Conhecimento não encontrado nesta história.")
+        return self._knowledge_target(knowledge)
+
+    def resolve_knowledge_update_by_id(self, story_id: UUID, knowledge_id: UUID) -> UpdateTarget:
+        knowledge = self.characters.get_knowledge_by_id_in_story(story_id, knowledge_id)
+        if knowledge is None:
+            raise ResourceNotFoundError("Conhecimento não encontrado nesta história.")
+        return self._knowledge_target(knowledge)
+
+    def _knowledge_target(self, knowledge: Any) -> UpdateTarget:
+        character_id, fact_id = knowledge.character_id, knowledge.fact_id
 
         def validate(after: dict[str, Any]) -> None:
             merged = {
@@ -123,15 +144,19 @@ class CharacterUseCases:
                 visibility=merged["visibility"],
             )
 
-        return self.transitions.update(
-            story_id=story_id,
+        return UpdateTarget(
             record=knowledge,
-            updates=updates,
             event_type=CHARACTER_KNOWLEDGE_UPDATED,
             aggregate_type="character_knowledge",
             persist=self.characters.update_knowledge,
             validate=validate,
         )
+
+    def update_knowledge(
+        self, story_id: UUID, character_id: UUID, fact_id: UUID, updates: dict[str, Any]
+    ) -> Any:
+        target = self.resolve_knowledge_update(story_id, character_id, fact_id)
+        return self.transitions.update(story_id=story_id, updates=updates, **target.as_kwargs())
 
     def list_knowledge(self, story_id: UUID, character_id: UUID) -> list[Any]:
         if self.characters.get_in_story(story_id, character_id) is None:
@@ -143,9 +168,7 @@ class CharacterUseCases:
         with transaction(self.unit_of_work):
             return self.characters.create_relationship(story_id=story_id, values=values)
 
-    def update_relationship(
-        self, story_id: UUID, relationship_id: UUID, updates: dict[str, Any]
-    ) -> Any:
+    def resolve_relationship_update(self, story_id: UUID, relationship_id: UUID) -> UpdateTarget:
         relationship = self.characters.get_relationship_in_story(story_id, relationship_id)
         if relationship is None:
             raise ResourceNotFoundError("Relacionamento não encontrado nesta história.")
@@ -161,15 +184,19 @@ class CharacterUseCases:
                 status=merged["status"],
             )
 
-        return self.transitions.update(
-            story_id=story_id,
+        return UpdateTarget(
             record=relationship,
-            updates=updates,
             event_type=RELATIONSHIP_UPDATED,
             aggregate_type="relationship",
             persist=self.characters.update_relationship,
             validate=validate,
         )
+
+    def update_relationship(
+        self, story_id: UUID, relationship_id: UUID, updates: dict[str, Any]
+    ) -> Any:
+        target = self.resolve_relationship_update(story_id, relationship_id)
+        return self.transitions.update(story_id=story_id, updates=updates, **target.as_kwargs())
 
     def list_relationships(self, story_id: UUID) -> list[Any]:
         self.stories.get_story(story_id)

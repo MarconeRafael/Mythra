@@ -6,16 +6,10 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.orm import Session
 
 from mythra.application.state.snapshot import StoryStateSnapshot
 from mythra.application.use_cases import MythraUseCases
-from mythra.infrastructure.db.repositories.characters import CharacterRepository
 from mythra.infrastructure.db.repositories.events import StoryEventRepository
-from mythra.infrastructure.db.repositories.narratives import NarrativeRepository
-from mythra.infrastructure.db.repositories.stories import StoryRepository
-from mythra.infrastructure.db.repositories.users import UserRepository
-from mythra.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 T1 = datetime(2026, 2, 1, tzinfo=UTC)
@@ -477,26 +471,14 @@ def test_transitions_are_isolated_between_stories(client: TestClient, scenario: 
     assert client.get(f"/stories/{other.story_id}/characters").json()[0]["emotional_state"] is None
 
 
-def _use_cases(session: Session) -> MythraUseCases:
-    return MythraUseCases(
-        users=UserRepository(session),
-        stories=StoryRepository(session),
-        characters=CharacterRepository(session),
-        narratives=NarrativeRepository(session),
-        events=StoryEventRepository(session),
-        unit_of_work=SqlAlchemyUnitOfWork(session),
-    )
-
-
 def test_story_state_snapshot_is_typed_current_state_without_history(
-    client: TestClient, scenario: Scenario, db_session: Session
+    client: TestClient, scenario: Scenario, use_cases: MythraUseCases
 ) -> None:
     client.patch(
         f"/stories/{scenario.story_id}/relationships/{scenario.relationship_id}",
         json={"trust": 0.1},
     )
     other = _build_story(client)
-    use_cases = _use_cases(db_session)
 
     state = use_cases.get_story_state(UUID(scenario.story_id))
 

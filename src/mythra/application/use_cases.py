@@ -4,6 +4,7 @@ Mantém uma única superfície pública usada pelos routers, delegando cada
 operação ao caso de uso especializado da respectiva área de domínio.
 """
 
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
@@ -14,7 +15,9 @@ from mythra.application.events.transitions import TransitionRecorder
 from mythra.application.events.use_cases import EventUseCases
 from mythra.application.narratives.ports import NarrativeStore
 from mythra.application.narratives.use_cases import NarrativeUseCases
+from mythra.application.state.ports import StateTransitionStore
 from mythra.application.state.snapshot import StoryStateSnapshot
+from mythra.application.state.transitions import StateTransitionUseCases
 from mythra.application.state.use_cases import StoryStateUseCases
 from mythra.application.stories.ports import StoryStore
 from mythra.application.stories.use_cases import StoryUseCases
@@ -34,14 +37,44 @@ class MythraUseCases:
         narratives: NarrativeStore,
         events: StoryEventStore,
         unit_of_work: UnitOfWork,
+        state_transitions: StateTransitionStore,
     ) -> None:
-        transitions = TransitionRecorder(events, unit_of_work)
+        transitions = TransitionRecorder(events, stories, unit_of_work)
         self._users = UserUseCases(users, unit_of_work)
         self._stories = StoryUseCases(stories, self._users, unit_of_work)
         self._characters = CharacterUseCases(characters, self._stories, transitions, unit_of_work)
         self._narratives = NarrativeUseCases(narratives, self._stories, transitions, unit_of_work)
         self._events = EventUseCases(events, self._stories, unit_of_work)
         self._state = StoryStateUseCases(self._stories, stories, characters, narratives)
+        self._state_transitions = StateTransitionUseCases(
+            state_transitions,
+            self._stories,
+            self._characters,
+            self._narratives,
+            transitions,
+            unit_of_work,
+        )
+
+    def propose_transition(self, story_id: UUID, **proposal: Any) -> Any:
+        return self._state_transitions.propose(story_id, **proposal)
+
+    def decide_transition(
+        self, story_id: UUID, transition_id: UUID, *, approve: bool, decided_by_user_id: UUID | None
+    ) -> Any:
+        return self._state_transitions.decide(
+            story_id, transition_id, approve=approve, decided_by_user_id=decided_by_user_id
+        )
+
+    def apply_transitions(
+        self,
+        story_id: UUID,
+        transition_ids: Sequence[UUID],
+        *,
+        expected_state_version: int | None = None,
+    ) -> list[Any]:
+        return self._state_transitions.apply(
+            story_id, transition_ids, expected_state_version=expected_state_version
+        )
 
     def create_user(self, email: str, display_name: str) -> Any:
         return self._users.create_user(email, display_name)
