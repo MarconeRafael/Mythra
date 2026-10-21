@@ -9,11 +9,15 @@ from mythra.api.dependencies import get_use_cases
 from mythra.api.schemas import (
     CharacterCreate,
     CharacterKnowledgeCreate,
+    CharacterKnowledgePatch,
     CharacterKnowledgeRead,
+    CharacterPatch,
     CharacterRead,
     CharacterRelationshipCreate,
+    CharacterRelationshipPatch,
     CharacterRelationshipRead,
     StoryFactCreate,
+    StoryFactPatch,
     StoryFactRead,
 )
 from mythra.application.use_cases import MythraUseCases
@@ -34,9 +38,25 @@ def list_characters(story_id: UUID, use_cases: UseCases) -> list[CharacterRead]:
     return [CharacterRead.model_validate(item) for item in use_cases.list_characters(story_id)]
 
 
+@router.patch("/characters/{character_id}", response_model=CharacterRead)
+def update_character(
+    story_id: UUID, character_id: UUID, payload: CharacterPatch, use_cases: UseCases
+) -> CharacterRead:
+    updates = payload.model_dump(exclude_unset=True)
+    return CharacterRead.model_validate(use_cases.update_character(story_id, character_id, updates))
+
+
 @router.post("/facts", response_model=StoryFactRead, status_code=status.HTTP_201_CREATED)
 def create_fact(story_id: UUID, payload: StoryFactCreate, use_cases: UseCases) -> StoryFactRead:
     return StoryFactRead.model_validate(use_cases.create_fact(story_id, payload.model_dump()))
+
+
+@router.patch("/facts/{fact_id}", response_model=StoryFactRead)
+def update_fact(
+    story_id: UUID, fact_id: UUID, payload: StoryFactPatch, use_cases: UseCases
+) -> StoryFactRead:
+    updates = payload.model_dump(exclude_unset=True)
+    return StoryFactRead.model_validate(use_cases.update_fact(story_id, fact_id, updates))
 
 
 @router.get("/facts", response_model=list[StoryFactRead])
@@ -71,6 +91,22 @@ def list_knowledge(
     ]
 
 
+@router.patch(
+    "/characters/{character_id}/knowledge/{fact_id}", response_model=CharacterKnowledgeRead
+)
+def update_knowledge(
+    story_id: UUID,
+    character_id: UUID,
+    fact_id: UUID,
+    payload: CharacterKnowledgePatch,
+    use_cases: UseCases,
+) -> CharacterKnowledgeRead:
+    updates = payload.model_dump(exclude_unset=True)
+    return CharacterKnowledgeRead.model_validate(
+        use_cases.update_knowledge(story_id, character_id, fact_id, updates)
+    )
+
+
 @router.post(
     "/relationships", response_model=CharacterRelationshipRead, status_code=status.HTTP_201_CREATED
 )
@@ -79,6 +115,19 @@ def create_relationship(
 ) -> CharacterRelationshipRead:
     return CharacterRelationshipRead.model_validate(
         use_cases.create_relationship(story_id, payload.model_dump())
+    )
+
+
+@router.patch("/relationships/{relationship_id}", response_model=CharacterRelationshipRead)
+def update_relationship(
+    story_id: UUID,
+    relationship_id: UUID,
+    payload: CharacterRelationshipPatch,
+    use_cases: UseCases,
+) -> CharacterRelationshipRead:
+    updates = payload.model_dump(exclude_unset=True)
+    return CharacterRelationshipRead.model_validate(
+        use_cases.update_relationship(story_id, relationship_id, updates)
     )
 
 

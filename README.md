@@ -63,7 +63,7 @@ alembic downgrade -1
 
 ## Testes e qualidade
 
-Testes unitários não necessitam de banco. Os testes de integração executam migrations e necessitam de um banco PostgreSQL descartável definido por `MYTHRA_TEST_DATABASE_URL`; a suíte reverte as migrations no encerramento. Não aponte essa variável para dados de produção.
+Testes unitários não necessitam de banco. Os testes de integração executam migrations e necessitam de um banco PostgreSQL descartável definido por `MYTHRA_TEST_DATABASE_URL`; a suíte reverte as migrations no encerramento. Não aponte essa variável para dados de produção. As migrations da suíte sempre usam `MYTHRA_TEST_DATABASE_URL`, e o pytest usa `--tb=short` para não imprimir parâmetros de conexão (que incluem a senha) em falhas.
 
 ```powershell
 pytest
@@ -91,5 +91,17 @@ docs/                  # arquitetura e decisões da Fase 01
 Inclui criação e consulta de usuários e entidades narrativas, configuração de preferências, atualização de Story, conhecimento individual, persistência PostgreSQL, constraints relacionais e log append-only de eventos.
 
 Ainda não implementa geração por LLM, autenticação/autorização, engines narrativos, inferência automática de conhecimento, RAG, pgvector, ML, ETL, workers, microserviços, AWS ou frontend.
+
+## Fase 02 — Narrative Core (parcial)
+
+Implementado:
+
+- **Story State**: snapshot tipado e imutável do estado canônico atual (`MythraUseCases.get_story_state`), montado na camada de aplicação a partir das tabelas normalizadas. Não há tabela, JSON, cache ou endpoint HTTP de estado agregado, e o snapshot não contém histórico; `StoryEvent` continua sendo consultado separadamente (`list_story_events`).
+- **Transições de estado** com rotas `PATCH` estreitas para Character, CharacterRelationship (`trust`, `status`), CharacterKnowledge (`known_at`, `confidence`, `visibility`), StoryFact, TimelineEvent, PlotThread, StoryArc e Chapter. A criação canônica de fatos continua em `POST /stories/{story_id}/facts`. Identidade e vínculos de história não são editáveis.
+- **Eventos**: cada transição efetiva grava exatamente um `StoryEvent` na mesma transação: `character_state_updated`, `relationship_updated`, `character_knowledge_updated`, `canonical_fact_created`, `canonical_fact_updated`, `timeline_event_updated`, `plot_thread_updated`, `story_arc_updated` e `chapter_updated`. O payload contém apenas campos realmente alterados: `{"changes": {"campo": {"before": ..., "after": ...}}}`; na criação, `before` é `null` e campos nulos são omitidos.
+- **PATCH idempotente**: sem mudança efetiva, retorna o recurso atual sem escrita nem evento. Transições rejeitadas não alteram estado nem geram evento.
+- **Transação**: a fronteira de caso de uso (`application/transactions.py`) é a única que faz commit/rollback; repositories apenas adicionam e fazem flush.
+
+Lacuna: **Location** e **Faction** não existem no baseline da Fase 01 e foram explicitamente adiados — nenhum schema, API ou código foi inventado para eles. Por isso a Fase 02 não está completa.
 
 Para a visão arquitetural completa (incluindo componentes futuros como Narrative Orchestrator, Story Engine, Memory Engine, Consistency Engine, pipeline de geração e o roadmap de fases), consulte [docs/architecture/phase-01.md](docs/architecture/phase-01.md).

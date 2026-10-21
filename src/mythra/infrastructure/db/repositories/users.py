@@ -8,7 +8,7 @@ from mythra.infrastructure.db.models import User
 
 
 class UserRepository:
-    """Operações de gravação e leitura de usuários."""
+    """Gravação e leitura de usuários; o commit pertence à camada de aplicação."""
 
     def __init__(self, session: Session) -> None:
         self.session = session
@@ -16,7 +16,7 @@ class UserRepository:
     def create(self, *, email: str, display_name: str) -> User:
         user = User(email=email, display_name=display_name)
         self.session.add(user)
-        self.session.commit()
+        self.session.flush()
         self.session.refresh(user)
         return user
 

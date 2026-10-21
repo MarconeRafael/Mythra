@@ -12,6 +12,7 @@ from mythra.infrastructure.db.repositories.narratives import NarrativeRepository
 from mythra.infrastructure.db.repositories.stories import StoryRepository
 from mythra.infrastructure.db.repositories.users import UserRepository
 from mythra.infrastructure.db.session import get_session
+from mythra.infrastructure.db.unit_of_work import SqlAlchemyUnitOfWork
 
 __all__ = ["get_session", "get_use_cases"]
 
@@ -26,4 +27,5 @@ def get_use_cases(
         characters=CharacterRepository(session),
         narratives=NarrativeRepository(session),
         events=StoryEventRepository(session),
+        unit_of_work=SqlAlchemyUnitOfWork(session),
     )

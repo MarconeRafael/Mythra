@@ -25,7 +25,7 @@ Immutable Event Log
 ```
 
 - **Current State**: cada entidade narrativa (`Story`, `Character`, `CharacterRelationship`, `StoryArc`, `Chapter`, `TimelineEvent`, `PlotThread`, etc.) é persistida em sua própria tabela relacional e representa o estado **atual**. Atualizações substituem o valor corrente (via `updated_at`), sem manter histórico de versões anteriores na própria tabela.
-- **Immutable Event Log**: `StoryEvent` é append-only e registra o histórico de acontecimentos relevantes (`story_created`, `character_created`, `chapter_created`, `relationship_changed`, etc.). Eventos nunca são atualizados ou apagados pela API normal. `payload` usa JSONB por ser um registro histórico com dados variáveis.
+- **Immutable Event Log**: `StoryEvent` é append-only e registra o histórico de acontecimentos relevantes (na Fase 02, os tipos `character_state_updated`, `relationship_updated`, `canonical_fact_created` etc. descritos abaixo; eventos de criação das demais entidades não são emitidos automaticamente). Eventos nunca são atualizados ou apagados pela API normal. `payload` usa JSONB por ser um registro histórico com dados variáveis.
 
 Isso é implementado na Fase 01. O estado atual nunca é derivado apenas do log de eventos — ele é persistido diretamente nas entidades, e o log serve como histórico auditável, não como fonte única de verdade.
 
@@ -132,6 +132,18 @@ FASE 10  AWS
 ## Escopo da Fase 01
 
 Implementado: User, Story, StoryPreferences, Character, CharacterRelationship, StoryFact, CharacterKnowledge, StoryArc, Chapter, TimelineEvent, PlotThread e StoryEvent, com API REST, persistência PostgreSQL via SQLAlchemy 2.x/Alembic, constraints relacionais e testes unitários/integração reais.
+
+## Fase 02 — Narrative Core (parcial)
+
+**Story State.** É um snapshot tipado e imutável (`application/state`) do estado canônico *atual*, composto das entidades normalizadas da história sem vazar objetos SQLAlchemy. Não há tabela `story_state`, JSON/JSONB, cache ou endpoint de estado agregado. O histórico imutável (`StoryEvent`) não faz parte do snapshot e é exposto separadamente pela aplicação.
+
+**Transições.** Cada operação é explícita (sem `update_entity` genérico). O `TransitionRecorder` calcula as mudanças efetivas; sem mudança, nada é gravado. Com mudança, valida as invariáveis de domínio sobre o estado resultante, grava a entidade e exatamente um `StoryEvent` (`aggregate_type` = `character`, `relationship`, `character_knowledge`, `story_fact`, `timeline_event`, `plot_thread`, `story_arc` ou `chapter`) na mesma transação.
+
+**Transação.** `transaction()` em `application/transactions.py` é autoritativa: confirma ao final com sucesso e reverte tudo em qualquer falha. Repositories não fazem commit nem rollback; apenas `add`/`flush`. Falha ao inserir o evento reverte a mudança de estado.
+
+**Fora do escopo desta entrega (GAP).** `Location` e `Faction` não existem no baseline da Fase 01; foram adiados sem criar schema, API ou código. Também não há deduplicação de fatos, inferência de contradições nem aprovação humana. Uma regra `valid_to > valid_from` em `StoryFact` não existia na Fase 01 e não foi introduzida; fica como consideração de regra de domínio futura.
+
+**Status.** Implementação central (Story State, transições, eventos, transação atômica): concluída. Location: adiado. Faction: adiado. A Fase 02 não é declarada 100% aceita enquanto ambos permanecerem adiados.
 
 ## Componentes fora do escopo
 

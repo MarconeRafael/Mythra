@@ -17,7 +17,7 @@ class StoryEventRepository:
     def append(self, *, story_id: UUID, values: dict[str, object]) -> StoryEvent:
         event = StoryEvent(story_id=story_id, **values)
         self.session.add(event)
-        self.session.commit()
+        self.session.flush()
         self.session.refresh(event)
         return event
 

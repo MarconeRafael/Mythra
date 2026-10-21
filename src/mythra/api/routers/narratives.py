@@ -8,14 +8,18 @@ from fastapi import APIRouter, Depends, status
 from mythra.api.dependencies import get_use_cases
 from mythra.api.schemas import (
     ChapterCreate,
+    ChapterPatch,
     ChapterRead,
     PlotThreadCreate,
+    PlotThreadPatch,
     PlotThreadRead,
     StoryArcCreate,
+    StoryArcPatch,
     StoryArcRead,
     StoryEventCreate,
     StoryEventRead,
     TimelineEventCreate,
+    TimelineEventPatch,
     TimelineEventRead,
 )
 from mythra.application.use_cases import MythraUseCases
@@ -45,6 +49,16 @@ def list_timeline_events(story_id: UUID, use_cases: UseCases) -> list[TimelineEv
     ]
 
 
+@router.patch("/timeline-events/{timeline_event_id}", response_model=TimelineEventRead)
+def update_timeline_event(
+    story_id: UUID, timeline_event_id: UUID, payload: TimelineEventPatch, use_cases: UseCases
+) -> TimelineEventRead:
+    updates = payload.model_dump(exclude_unset=True)
+    return TimelineEventRead.model_validate(
+        use_cases.update_timeline_event(story_id, timeline_event_id, updates)
+    )
+
+
 @router.post("/plot-threads", response_model=PlotThreadRead, status_code=status.HTTP_201_CREATED)
 def create_plot_thread(
     story_id: UUID, payload: PlotThreadCreate, use_cases: UseCases
@@ -58,6 +72,16 @@ def list_plot_threads(story_id: UUID, use_cases: UseCases) -> list[PlotThreadRea
     return [PlotThreadRead.model_validate(item) for item in use_cases.list_plot_threads(story_id)]
 
 
+@router.patch("/plot-threads/{plot_thread_id}", response_model=PlotThreadRead)
+def update_plot_thread(
+    story_id: UUID, plot_thread_id: UUID, payload: PlotThreadPatch, use_cases: UseCases
+) -> PlotThreadRead:
+    updates = payload.model_dump(exclude_unset=True)
+    return PlotThreadRead.model_validate(
+        use_cases.update_plot_thread(story_id, plot_thread_id, updates)
+    )
+
+
 @router.post("/arcs", response_model=StoryArcRead, status_code=status.HTTP_201_CREATED)
 def create_arc(story_id: UUID, payload: StoryArcCreate, use_cases: UseCases) -> StoryArcRead:
     return StoryArcRead.model_validate(use_cases.create_arc(story_id, payload.model_dump()))
@@ -68,9 +92,25 @@ def list_arcs(story_id: UUID, use_cases: UseCases) -> list[StoryArcRead]:
     return [StoryArcRead.model_validate(item) for item in use_cases.list_arcs(story_id)]
 
 
+@router.patch("/arcs/{arc_id}", response_model=StoryArcRead)
+def update_arc(
+    story_id: UUID, arc_id: UUID, payload: StoryArcPatch, use_cases: UseCases
+) -> StoryArcRead:
+    updates = payload.model_dump(exclude_unset=True)
+    return StoryArcRead.model_validate(use_cases.update_arc(story_id, arc_id, updates))
+
+
 @router.post("/chapters", response_model=ChapterRead, status_code=status.HTTP_201_CREATED)
 def create_chapter(story_id: UUID, payload: ChapterCreate, use_cases: UseCases) -> ChapterRead:
     return ChapterRead.model_validate(use_cases.create_chapter(story_id, payload.model_dump()))
+
+
+@router.patch("/chapters/{chapter_id}", response_model=ChapterRead)
+def update_chapter(
+    story_id: UUID, chapter_id: UUID, payload: ChapterPatch, use_cases: UseCases
+) -> ChapterRead:
+    updates = payload.model_dump(exclude_unset=True)
+    return ChapterRead.model_validate(use_cases.update_chapter(story_id, chapter_id, updates))
 
 
 @router.get("/chapters", response_model=list[ChapterRead])

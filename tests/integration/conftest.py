@@ -11,6 +11,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from mythra.api.dependencies import get_session
+from mythra.core.config import get_settings
 from mythra.infrastructure.db.session import engine as application_engine
 from mythra.main import app
 
@@ -25,13 +26,26 @@ def postgres_url() -> str:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def migrate_test_database(postgres_url: str) -> Generator[None, None, None]:
+def migrate_test_database(
+    postgres_url: str, monkeypatch_session: pytest.MonkeyPatch
+) -> Generator[None, None, None]:
     """Aplica migrations reais antes dos testes e remove o esquema ao final."""
+    # migrations/env.py lê a URL das settings, não de set_main_option; força o banco de teste.
+    monkeypatch_session.setenv("MYTHRA_DATABASE_URL", postgres_url)
+    get_settings.cache_clear()
     config = Config("alembic.ini")
     config.set_main_option("sqlalchemy.url", postgres_url.replace("%", "%%"))
     command.upgrade(config, "head")
     yield
     command.downgrade(config, "base")
+    monkeypatch_session.undo()
+    get_settings.cache_clear()
+
+
+@pytest.fixture(scope="session")
+def monkeypatch_session() -> Generator[pytest.MonkeyPatch, None, None]:
+    with pytest.MonkeyPatch.context() as patch:
+        yield patch
 
 
 @pytest.fixture

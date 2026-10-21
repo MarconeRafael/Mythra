@@ -9,7 +9,7 @@ from mythra.infrastructure.db.models import Story, StoryPreferences
 
 
 class StoryRepository:
-    """Operações de história e de sua preferência um-para-um."""
+    """História e preferência um-para-um; o commit pertence à camada de aplicação."""
 
     def __init__(self, session: Session) -> None:
         self.session = session
@@ -17,7 +17,7 @@ class StoryRepository:
     def create(self, *, user_id: UUID, title: str, premise: str) -> Story:
         story = Story(user_id=user_id, title=title, premise=premise)
         self.session.add(story)
-        self.session.commit()
+        self.session.flush()
         self.session.refresh(story)
         return story
 
@@ -27,14 +27,14 @@ class StoryRepository:
     def update(self, story: Story, changes: dict[str, str]) -> Story:
         for field, value in changes.items():
             setattr(story, field, value)
-        self.session.commit()
+        self.session.flush()
         self.session.refresh(story)
         return story
 
     def create_preferences(self, *, story_id: UUID, tone: str) -> StoryPreferences:
         preferences = StoryPreferences(story_id=story_id, tone=tone)
         self.session.add(preferences)
-        self.session.commit()
+        self.session.flush()
         self.session.refresh(preferences)
         return preferences
 

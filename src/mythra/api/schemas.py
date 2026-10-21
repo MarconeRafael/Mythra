@@ -1,10 +1,10 @@
 """Contratos Pydantic da API, separados dos modelos relacionais."""
 
 from datetime import UTC, datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, ClassVar, Literal, Self
 from uuid import UUID
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 
 def _normalize_utc(value: datetime) -> datetime:
@@ -197,6 +197,94 @@ class ChapterRead(ReadSchema):
     summary: str | None
     content: str | None
     status: str
+
+
+class PatchSchema(BaseModel):
+    """Atualização parcial: só campos enviados contam e identidade/vínculos são proibidos."""
+
+    model_config = ConfigDict(extra="forbid")
+    non_nullable: ClassVar[frozenset[str]] = frozenset()
+
+    @model_validator(mode="after")
+    def _reject_null_for_required_fields(self) -> Self:
+        for name in self.model_fields_set & self.non_nullable:
+            if getattr(self, name) is None:
+                raise ValueError(f"{name} não pode ser nulo.")
+        return self
+
+
+class CharacterPatch(PatchSchema):
+    non_nullable = frozenset({"name"})
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = None
+    age: int | None = None
+    personality: str | None = None
+    goals: str | None = None
+    fears: str | None = None
+    beliefs: str | None = None
+    emotional_state: str | None = None
+
+
+class CharacterRelationshipPatch(PatchSchema):
+    non_nullable = frozenset({"trust", "status"})
+
+    trust: float | None = Field(default=None, ge=-1.0, le=1.0)
+    status: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+class CharacterKnowledgePatch(PatchSchema):
+    non_nullable = frozenset({"known_at", "confidence", "visibility"})
+
+    known_at: UTCDateTime | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    visibility: str | None = Field(default=None, min_length=1)
+
+
+class StoryFactPatch(PatchSchema):
+    non_nullable = frozenset({"subject", "predicate", "object", "valid_from", "source"})
+
+    subject: str | None = Field(default=None, min_length=1)
+    predicate: str | None = Field(default=None, min_length=1, max_length=200)
+    object: str | None = Field(default=None, min_length=1)
+    valid_from: UTCDateTime | None = None
+    valid_to: UTCDateTime | None = None
+    source: str | None = Field(default=None, min_length=1)
+
+
+class TimelineEventPatch(PatchSchema):
+    non_nullable = frozenset({"title", "occurred_at"})
+
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+    description: str | None = None
+    occurred_at: UTCDateTime | None = None
+
+
+class PlotThreadPatch(PatchSchema):
+    non_nullable = frozenset({"title", "status"})
+
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+    description: str | None = None
+    status: Literal["open", "resolved", "abandoned"] | None = None
+
+
+class StoryArcPatch(PatchSchema):
+    non_nullable = frozenset({"title", "position", "status"})
+
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+    description: str | None = None
+    position: int | None = None
+    status: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+class ChapterPatch(PatchSchema):
+    non_nullable = frozenset({"title", "position", "status"})
+
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+    position: int | None = None
+    summary: str | None = None
+    content: str | None = None
+    status: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 class StoryEventCreate(BaseModel):
