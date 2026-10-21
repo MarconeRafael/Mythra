@@ -8,6 +8,27 @@ from uuid import uuid4
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.orm import Session
+
+from mythra.infrastructure.db.models import (
+    Chapter,
+    Character,
+    Faction,
+    GenerationEvent,
+    GenerationRun,
+    Location,
+    Memory,
+    NarrativeRule,
+    Scene,
+    StateTransition,
+    Story,
+    StoryArc,
+    StoryEvent,
+    User,
+    UserEdit,
+    ValidationResult,
+    ValidationRun,
+)
 
 
 def test_models_and_head_revision_have_no_schema_drift(alembic_config: Config) -> None:
@@ -142,4 +163,92 @@ def test_every_revision_downgrades_one_step_at_a_time(
             assert current == target
     finally:
         command.upgrade(alembic_config, "head")
+        engine.dispose()
+
+
+def test_downgrade_with_every_new_table_populated_keeps_the_original_data(
+    alembic_config: Config, postgres_url: str
+) -> None:
+    now = datetime.now(UTC)
+    engine = create_engine(postgres_url)
+    user_id = uuid4()
+    try:
+        with Session(engine) as session:
+            session.add(User(id=user_id, email=f"{user_id}@example.com", display_name="Autor"))
+            session.flush()
+            story = Story(user_id=user_id, title="t", premise="p")
+            session.add(story)
+            session.flush()
+            sid = story.id
+            character = Character(story_id=sid, name="Ana")
+            arc = StoryArc(story_id=sid, title="Arco", position=1, status="active")
+            event = StoryEvent(
+                story_id=sid, event_type="e", aggregate_type="character",
+                aggregate_id=uuid4(), payload={}, occurred_at=now,
+            )  # fmt: skip
+            run = GenerationRun(story_id=sid, run_type="chapter", base_state_version=0)
+            session.add_all([character, arc, event, run, Location(story_id=sid, name="Lugar")])
+            session.flush()
+            chapter = Chapter(
+                story_id=sid, arc_id=arc.id, title="Cap", position=1, status="draft",
+                generation_run_id=run.id,
+            )  # fmt: skip
+            session.add(chapter)
+            session.flush()
+            scene = Scene(
+                story_id=sid, chapter_id=chapter.id, position=1, status="draft",
+                generation_run_id=run.id,
+            )  # fmt: skip
+            edit = UserEdit(
+                story_id=sid, user_id=user_id, chapter_id=chapter.id, base_revision=1,
+                resulting_revision=2, content_before="a", content_after="b",
+            )  # fmt: skip
+            validation = ValidationRun(
+                story_id=sid, generation_run_id=run.id, validator="v", base_state_version=0
+            )
+            session.add_all([scene, edit, validation])
+            session.flush()
+            transition = StateTransition(
+                story_id=sid, generation_run_id=run.id, event_type="character_state_updated",
+                aggregate_type="character", aggregate_id=character.id, operation="update",
+                changes={"changes": {}}, base_state_version=0, status="applied",
+                decided_at=now, applied_at=now, applied_story_event_id=event.id,
+            )  # fmt: skip
+            session.add_all(
+                [
+                    transition,
+                    Faction(story_id=sid, name="Ordem"),
+                    NarrativeRule(story_id=sid, rule_type="w", title="t", description="d",
+                                  severity="info"),
+                    Memory(story_id=sid, character_id=character.id, source_event_id=event.id,
+                           generation_run_id=run.id, memory_type="s", content="x"),
+                    GenerationEvent(story_id=sid, generation_run_id=run.id, sequence=1,
+                                    event_type="x", occurred_at=now),
+                ]
+            )  # fmt: skip
+            session.flush()
+            session.add(
+                ValidationResult(
+                    story_id=sid, validation_run_id=validation.id,
+                    state_transition_id=transition.id, scene_id=scene.id, severity="info",
+                    code="c", message="m",
+                )  # fmt: skip
+            )
+            session.commit()
+
+        command.downgrade(alembic_config, "0001_initial")
+
+        with engine.connect() as conn:
+            kept = conn.execute(
+                text(
+                    "SELECT (SELECT count(*) FROM characters), "
+                    "(SELECT count(*) FROM story_events), (SELECT count(*) FROM chapters)"
+                )
+            ).one()
+        assert tuple(kept) == (1, 1, 1)
+    finally:
+        command.upgrade(alembic_config, "head")
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM stories WHERE user_id = :u"), {"u": user_id})
+            conn.execute(text("DELETE FROM users WHERE id = :u"), {"u": user_id})
         engine.dispose()
