@@ -301,9 +301,12 @@ class StoryEventRead(BaseModel):
 
     id: UUID
     story_id: UUID
+    sequence: int
     event_type: str
     aggregate_type: str
     aggregate_id: UUID
+    source: str
+    operation: str
     payload: dict[str, Any]
     occurred_at: datetime
     created_at: datetime

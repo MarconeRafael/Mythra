@@ -65,64 +65,100 @@ def test_existing_valid_data_survives_upgrade_and_downgrade_is_clean(
         assert "state_version" not in {c["name"] for c in inspector.get_columns("stories")}
 
         with engine.begin() as conn:
-            conn.execute(text("INSERT INTO users (id, email, display_name) VALUES (:i, :e, 'x')"),
-                         {"i": user, "e": f"{user}@example.com"})
-            conn.execute(text("INSERT INTO stories (id, user_id, title, premise) "
-                              "VALUES (:i, :u, 't', 'p')"), {"i": story, "u": user})
-            conn.execute(text("INSERT INTO characters (id, story_id, name) VALUES (:i, :s, 'c')"),
-                         {"i": character, "s": story})
-            conn.execute(text("INSERT INTO story_facts (id, story_id, subject, predicate, object, "
-                              "valid_from, source) VALUES (:i, :s, 'a', 'b', 'c', now(), 'x')"),
-                         {"i": fact, "s": story})
+            conn.execute(
+                text("INSERT INTO users (id, email, display_name) VALUES (:i, :e, 'x')"),
+                {"i": user, "e": f"{user}@example.com"},
+            )
+            conn.execute(
+                text("INSERT INTO stories (id, user_id, title, premise) VALUES (:i, :u, 't', 'p')"),
+                {"i": story, "u": user},
+            )
+            conn.execute(
+                text("INSERT INTO characters (id, story_id, name) VALUES (:i, :s, 'c')"),
+                {"i": character, "s": story},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO story_facts (id, story_id, subject, predicate, object, "
+                    "valid_from, source) VALUES (:i, :s, 'a', 'b', 'c', now(), 'x')"
+                ),
+                {"i": fact, "s": story},
+            )
             # Duas posições duplicadas (1, 1) e uma distinta (2): a migration deve renumerar 1..3.
             for index, (arc, position) in enumerate(zip(arcs, (1, 1, 2), strict=True)):
                 conn.execute(
-                    text("INSERT INTO story_arcs (id, story_id, title, position, status, "
-                         "created_at) VALUES (:i, :s, 'a', :p, 'x', :c)"),
+                    text(
+                        "INSERT INTO story_arcs (id, story_id, title, position, status, "
+                        "created_at) VALUES (:i, :s, 'a', :p, 'x', :c)"
+                    ),
                     {"i": arc, "s": story, "p": position, "c": base + timedelta(minutes=index)},
                 )
             for index, chapter in enumerate(chapters):
                 conn.execute(
-                    text("INSERT INTO chapters (id, story_id, arc_id, title, position, status, "
-                         "created_at) VALUES (:i, :s, :a, 'c', 7, 'draft', :c)"),
+                    text(
+                        "INSERT INTO chapters (id, story_id, arc_id, title, position, status, "
+                        "created_at) VALUES (:i, :s, :a, 'c', 7, 'draft', :c)"
+                    ),
                     {"i": chapter, "s": story, "a": arcs[0], "c": base + timedelta(minutes=index)},
                 )
             # Eventos inseridos fora de ordem cronológica.
             for event, offset in zip(events, (30, 10, 20), strict=True):
                 conn.execute(
-                    text("INSERT INTO story_events (id, story_id, event_type, aggregate_type, "
-                         "aggregate_id, payload, occurred_at) "
-                         "VALUES (:i, :s, 'e', 'character', :c, '{}'::jsonb, :o)"),
+                    text(
+                        "INSERT INTO story_events (id, story_id, event_type, aggregate_type, "
+                        "aggregate_id, payload, occurred_at) "
+                        "VALUES (:i, :s, 'e', 'character', :c, '{}'::jsonb, :o)"
+                    ),
                     {"i": event, "s": story, "c": character, "o": base + timedelta(minutes=offset)},
                 )
             conn.execute(
-                text("INSERT INTO character_knowledge (id, story_id, character_id, fact_id, "
-                     "known_at, confidence, visibility, source_event_id) "
-                     "VALUES (gen_random_uuid(), :s, :c, :f, now(), 0.5, 'known', :e)"),
+                text(
+                    "INSERT INTO character_knowledge (id, story_id, character_id, fact_id, "
+                    "known_at, confidence, visibility, source_event_id) "
+                    "VALUES (gen_random_uuid(), :s, :c, :f, now(), 0.5, 'known', :e)"
+                ),
                 {"s": story, "c": character, "f": fact, "e": events[0]},
             )
 
         command.upgrade(alembic_config, "head")
 
         with engine.connect() as conn:
-            arc_positions: dict[Any, Any] = dict(conn.execute(
-                text("SELECT id, position FROM story_arcs WHERE story_id = :s"), {"s": story}
-            ).all())
-            chapter_positions = [r[0] for r in conn.execute(
-                text("SELECT position FROM chapters WHERE story_id = :s ORDER BY position"),
-                {"s": story},
-            ).all()]
-            sequences: dict[Any, Any] = dict(conn.execute(
-                text("SELECT id, sequence FROM story_events WHERE story_id = :s"), {"s": story}
-            ).all())
+            arc_positions: dict[Any, Any] = dict(
+                conn.execute(
+                    text("SELECT id, position FROM story_arcs WHERE story_id = :s"), {"s": story}
+                ).all()
+            )
+            chapter_positions = [
+                r[0]
+                for r in conn.execute(
+                    text("SELECT position FROM chapters WHERE story_id = :s ORDER BY position"),
+                    {"s": story},
+                ).all()
+            ]
+            sequences: dict[Any, Any] = dict(
+                conn.execute(
+                    text("SELECT id, sequence FROM story_events WHERE story_id = :s"), {"s": story}
+                ).all()
+            )
             version, revision = conn.execute(
-                text("SELECT s.state_version, c.revision FROM stories s, chapters c "
-                     "WHERE s.id = :s AND c.id = :c"), {"s": story, "c": chapters[0]}
+                text(
+                    "SELECT s.state_version, c.revision FROM stories s, chapters c "
+                    "WHERE s.id = :s AND c.id = :c"
+                ),
+                {"s": story, "c": chapters[0]},
             ).one()
             knowledge_count: int = conn.execute(
                 text("SELECT count(*) FROM character_knowledge WHERE story_id = :s"), {"s": story}
             ).scalar_one()
+            backfilled = {
+                tuple(row)
+                for row in conn.execute(
+                    text("SELECT DISTINCT source, operation FROM story_events WHERE story_id = :s"),
+                    {"s": story},
+                )
+            }
 
+        assert backfilled == {("user", "record_story_event")}
         assert [arc_positions[a] for a in arcs] == [1, 2, 3]
         assert chapter_positions == [1, 2]
         assert (sequences[events[1]], sequences[events[2]], sequences[events[0]]) == (1, 2, 3)
@@ -130,10 +166,13 @@ def test_existing_valid_data_survives_upgrade_and_downgrade_is_clean(
 
         with engine.begin() as conn:
             new_sequence: int = conn.execute(
-                text("INSERT INTO story_events (id, story_id, event_type, aggregate_type, "
-                     "aggregate_id, payload, occurred_at) "
-                     "VALUES (gen_random_uuid(), :s, 'e', 'character', :c, '{}'::jsonb, now()) "
-                     "RETURNING sequence"), {"s": story, "c": character}
+                text(
+                    "INSERT INTO story_events (id, story_id, event_type, aggregate_type, "
+                    "aggregate_id, source, operation, payload, occurred_at) "
+                    "VALUES (gen_random_uuid(), :s, 'e', 'character', :c, 'user', 'x', "
+                    "'{}'::jsonb, now()) RETURNING sequence"
+                ),
+                {"s": story, "c": character},
             ).scalar_one()
         assert new_sequence == 4
     finally:
@@ -149,9 +188,9 @@ def test_every_revision_downgrades_one_step_at_a_time(
 ) -> None:
     engine = create_engine(postgres_url)
     steps = [
-        "0008_validation", "0007_state_transitions", "0006_user_edits", "0005_generation",
-        "0004_narrative_rules", "0003_world_and_scenes", "0002_integrity_hardening",
-        "0001_initial",
+        "0009_memories", "0008_validation", "0007_state_transitions", "0006_user_edits",
+        "0005_generation", "0004_narrative_rules", "0003_world_and_scenes",
+        "0002_integrity_hardening", "0001_initial",
     ]  # fmt: skip
     try:
         for target in steps:
@@ -180,11 +219,13 @@ def test_downgrade_with_every_new_table_populated_keeps_the_original_data(
             session.add(story)
             session.flush()
             sid = story.id
-            character = Character(story_id=sid, name="Ana")
+            character_id = uuid4()
+            character = Character(id=character_id, story_id=sid, name="Ana")
             arc = StoryArc(story_id=sid, title="Arco", position=1, status="active")
             event = StoryEvent(
-                story_id=sid, event_type="e", aggregate_type="character",
-                aggregate_id=uuid4(), payload={}, occurred_at=now,
+                story_id=sid, event_type="character_state_updated", aggregate_type="character",
+                aggregate_id=character_id, source="generation", operation="apply_transition",
+                payload={}, occurred_at=now,
             )  # fmt: skip
             run = GenerationRun(story_id=sid, run_type="chapter", base_state_version=0)
             session.add_all([character, arc, event, run, Location(story_id=sid, name="Lugar")])
@@ -229,9 +270,13 @@ def test_downgrade_with_every_new_table_populated_keeps_the_original_data(
             session.flush()
             session.add(
                 ValidationResult(
-                    story_id=sid, validation_run_id=validation.id,
-                    state_transition_id=transition.id, scene_id=scene.id, severity="info",
-                    code="c", message="m",
+                    story_id=sid,
+                    validation_run_id=validation.id,
+                    state_transition_id=transition.id,
+                    scene_id=scene.id,
+                    severity="info",
+                    code="c",
+                    message="m",
                 )  # fmt: skip
             )
             session.commit()

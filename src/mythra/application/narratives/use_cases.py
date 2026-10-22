@@ -4,16 +4,19 @@ from typing import Any
 from uuid import UUID
 
 from mythra.application.events.transitions import (
+    CHAPTER_CREATED,
     CHAPTER_UPDATED,
+    PLOT_THREAD_CREATED,
     PLOT_THREAD_UPDATED,
+    STORY_ARC_CREATED,
     STORY_ARC_UPDATED,
+    TIMELINE_EVENT_CREATED,
     TIMELINE_EVENT_UPDATED,
     TransitionRecorder,
     UpdateTarget,
 )
 from mythra.application.narratives.ports import NarrativeStore
 from mythra.application.stories.use_cases import StoryUseCases
-from mythra.application.transactions import UnitOfWork, transaction
 from mythra.core.exceptions import ResourceNotFoundError
 from mythra.domain.narratives.rules import ChapterPlacement, StoryArcState
 
@@ -30,17 +33,21 @@ class NarrativeUseCases:
         narratives: NarrativeStore,
         stories: StoryUseCases,
         transitions: TransitionRecorder,
-        unit_of_work: UnitOfWork,
     ) -> None:
         self.narratives = narratives
         self.stories = stories
         self.transitions = transitions
-        self.unit_of_work = unit_of_work
 
     def create_timeline_event(self, story_id: UUID, values: dict[str, Any]) -> Any:
         self.stories.get_story(story_id)
-        with transaction(self.unit_of_work):
-            return self.narratives.create_timeline_event(story_id=story_id, values=values)
+        return self.transitions.create(
+            story_id=story_id,
+            values=values,
+            event_type=TIMELINE_EVENT_CREATED,
+            aggregate_type="timeline_event",
+            operation="create_timeline_event",
+            persist=lambda: self.narratives.create_timeline_event(story_id=story_id, values=values),
+        )
 
     def list_timeline_events(self, story_id: UUID) -> list[Any]:
         self.stories.get_story(story_id)
@@ -56,6 +63,7 @@ class NarrativeUseCases:
             record=record,
             event_type=TIMELINE_EVENT_UPDATED,
             aggregate_type="timeline_event",
+            operation="update_timeline_event",
             persist=self.narratives.update_timeline_event,
             validate=_no_extra_rules,
         )
@@ -68,8 +76,14 @@ class NarrativeUseCases:
 
     def create_plot_thread(self, story_id: UUID, values: dict[str, Any]) -> Any:
         self.stories.get_story(story_id)
-        with transaction(self.unit_of_work):
-            return self.narratives.create_plot_thread(story_id=story_id, values=values)
+        return self.transitions.create(
+            story_id=story_id,
+            values=values,
+            event_type=PLOT_THREAD_CREATED,
+            aggregate_type="plot_thread",
+            operation="create_plot_thread",
+            persist=lambda: self.narratives.create_plot_thread(story_id=story_id, values=values),
+        )
 
     def list_plot_threads(self, story_id: UUID) -> list[Any]:
         self.stories.get_story(story_id)
@@ -83,6 +97,7 @@ class NarrativeUseCases:
             record=record,
             event_type=PLOT_THREAD_UPDATED,
             aggregate_type="plot_thread",
+            operation="update_plot_thread",
             persist=self.narratives.update_plot_thread,
             validate=_no_extra_rules,
         )
@@ -102,8 +117,14 @@ class NarrativeUseCases:
             status=values["status"],
             description=values.get("description"),
         )
-        with transaction(self.unit_of_work):
-            return self.narratives.create_arc(story_id=story_id, values=values)
+        return self.transitions.create(
+            story_id=story_id,
+            values=values,
+            event_type=STORY_ARC_CREATED,
+            aggregate_type="story_arc",
+            operation="create_arc",
+            persist=lambda: self.narratives.create_arc(story_id=story_id, values=values),
+        )
 
     def list_arcs(self, story_id: UUID) -> list[Any]:
         self.stories.get_story(story_id)
@@ -127,6 +148,7 @@ class NarrativeUseCases:
             record=record,
             event_type=STORY_ARC_UPDATED,
             aggregate_type="story_arc",
+            operation="update_arc",
             persist=self.narratives.update_arc,
             validate=validate,
         )
@@ -146,8 +168,14 @@ class NarrativeUseCases:
             arc_id=values["arc_id"],
             position=values["position"],
         )
-        with transaction(self.unit_of_work):
-            return self.narratives.create_chapter(story_id=story_id, values=values)
+        return self.transitions.create(
+            story_id=story_id,
+            values=values,
+            event_type=CHAPTER_CREATED,
+            aggregate_type="chapter",
+            operation="create_chapter",
+            persist=lambda: self.narratives.create_chapter(story_id=story_id, values=values),
+        )
 
     def list_chapters(self, story_id: UUID) -> list[Any]:
         self.stories.get_story(story_id)
@@ -161,6 +189,7 @@ class NarrativeUseCases:
             record=record,
             event_type=CHAPTER_UPDATED,
             aggregate_type="chapter",
+            operation="update_chapter",
             persist=self.narratives.update_chapter,
             validate=_no_extra_rules,
         )

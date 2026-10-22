@@ -37,8 +37,20 @@ class FakeEvents:
 
 
 class FakeVersions:
-    def __init__(self) -> None:
+    def __init__(self, on_refresh: Any = None) -> None:
         self.bumps = 0
+        self.locked: list[UUID] = []
+        self.refreshed: list[Any] = []
+        self.on_refresh = on_refresh
+
+    def lock_story(self, story_id: UUID) -> int | None:
+        self.locked.append(story_id)
+        return 0
+
+    def refresh(self, record: Any) -> None:
+        self.refreshed.append(record)
+        if self.on_refresh is not None:
+            self.on_refresh(record)
 
     def bump_state_version(self, story_id: UUID) -> int:
         self.bumps += 1
@@ -76,6 +88,7 @@ def _update(
         updates=updates,
         event_type="relationship_updated",
         aggregate_type="relationship",
+        operation="update_relationship",
         persist=_persist,
         validate=validate or (lambda _: None),
     )
@@ -92,6 +105,8 @@ def test_effective_update_commits_state_and_one_event_together() -> None:
     assert events.appended[0]["payload"] == {"changes": {"trust": {"before": 0.5, "after": 0.9}}}
     assert events.appended[0]["event_type"] == "relationship_updated"
     assert events.appended[0]["aggregate_id"] == record.id
+    assert events.appended[0]["source"] == "user"
+    assert events.appended[0]["operation"] == "update_relationship"
 
 
 def test_timestamps_are_serialized_as_utc_iso_strings() -> None:
@@ -148,6 +163,7 @@ def test_create_records_null_before_for_each_populated_field() -> None:
         values={"trust": 0.2, "status": "new", "valid_to": None},
         event_type="canonical_fact_created",
         aggregate_type="story_fact",
+        operation="create_fact",
         persist=lambda: record,
     )
 
@@ -169,6 +185,7 @@ def test_state_version_is_bumped_once_per_effective_change_and_staging_never_com
         "record": record,
         "event_type": "relationship_updated",
         "aggregate_type": "relationship",
+        "operation": "update_relationship",
         "persist": _persist,
         "validate": lambda _: None,
     }
@@ -179,3 +196,79 @@ def test_state_version_is_bumped_once_per_effective_change_and_staging_never_com
     assert staged is not None and staged.record is record
     assert versions.bumps == 1
     assert uow.calls == []
+
+
+def test_update_locks_the_story_and_rereads_the_record_before_deciding() -> None:
+    uow, events, versions = FakeUnitOfWork(), FakeEvents(), FakeVersions()
+    record = _record()
+    story_id = uuid4()
+
+    TransitionRecorder(events, versions, uow).update(
+        story_id=story_id,
+        record=record,
+        updates={"trust": 0.9},
+        event_type="relationship_updated",
+        aggregate_type="relationship",
+        operation="update_relationship",
+        persist=_persist,
+        validate=lambda _: None,
+    )
+
+    assert versions.locked == [story_id]
+    assert versions.refreshed == [record]
+
+
+def test_change_already_made_by_a_concurrent_writer_produces_no_event() -> None:
+    uow, events = FakeUnitOfWork(), FakeEvents()
+    versions = FakeVersions(on_refresh=lambda record: setattr(record, "trust", 0.9))
+    record = _record()
+
+    result = TransitionRecorder(events, versions, uow).update(
+        story_id=uuid4(),
+        record=record,
+        updates={"trust": 0.9},
+        event_type="relationship_updated",
+        aggregate_type="relationship",
+        operation="update_relationship",
+        persist=_persist,
+        validate=lambda _: None,
+    )
+
+    assert result is record
+    assert events.appended == [] and versions.bumps == 0
+    assert uow.calls == ["commit"]
+
+
+def test_before_reflects_the_state_read_under_the_lock() -> None:
+    events = FakeEvents()
+    versions = FakeVersions(on_refresh=lambda record: setattr(record, "trust", 0.1))
+
+    TransitionRecorder(events, versions, FakeUnitOfWork()).update(
+        story_id=uuid4(),
+        record=_record(),
+        updates={"trust": 0.9},
+        event_type="relationship_updated",
+        aggregate_type="relationship",
+        operation="update_relationship",
+        persist=_persist,
+        validate=lambda _: None,
+    )
+
+    assert events.appended[0]["payload"] == {"changes": {"trust": {"before": 0.1, "after": 0.9}}}
+
+
+def test_creating_the_story_itself_uses_the_new_record_id_as_owner() -> None:
+    events, versions = FakeEvents(), FakeVersions()
+    record = _record()
+
+    TransitionRecorder(events, versions, FakeUnitOfWork()).create(
+        story_id=None,
+        values={"title": "t"},
+        event_type="story_created",
+        aggregate_type="story",
+        operation="create_story",
+        persist=lambda: record,
+    )
+
+    assert versions.locked == [] and versions.bumps == 1
+    assert events.appended[0]["aggregate_id"] == record.id

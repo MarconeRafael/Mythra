@@ -143,8 +143,7 @@ def test_catalog_has_deferrable_unique_partial_indexes_identity_and_fk_actions(
 
     delete_action: str = db_session.execute(
         text(
-            "SELECT confdeltype FROM pg_constraint "
-            "WHERE conname = 'fk_knowledge_event_same_story'"
+            "SELECT confdeltype FROM pg_constraint WHERE conname = 'fk_knowledge_event_same_story'"
         )
     ).scalar_one()
     assert delete_action == "a"  # NO ACTION
@@ -156,7 +155,7 @@ def test_story_events_receive_increasing_sequence(
     w = make_world()
     later = StoryEvent(
         story_id=w.story.id, event_type="x", aggregate_type="character",
-        aggregate_id=uuid4(), payload={}, occurred_at=NOW,
+        aggregate_id=uuid4(), source="system", operation="test", payload={}, occurred_at=NOW,
     )  # fmt: skip
     db_session.add(later)
     db_session.flush()
@@ -237,8 +236,12 @@ def test_cross_story_references_to_transitions_rules_and_events_are_rejected(
         _rejected(
             db_session,
             ValidationResult(
-                story_id=w.story.id, validation_run_id=run.id, severity="error", code="c",
-                message="m", **{column: value},
+                story_id=w.story.id,
+                validation_run_id=run.id,
+                severity="error",
+                code="c",
+                message="m",
+                **{column: value},
             ),  # fmt: skip
         )
 
@@ -367,9 +370,15 @@ def test_valid_applied_transition_and_validation_graph_are_accepted(
     db_session.flush()
     db_session.add(
         ValidationResult(
-            story_id=w.story.id, validation_run_id=run.id, narrative_rule_id=rule.id,
-            state_transition_id=transition.id, scene_id=w.scene.id, severity="error",
-            code="rule_violation", message="m", details={"evidence": []},
+            story_id=w.story.id,
+            validation_run_id=run.id,
+            narrative_rule_id=rule.id,
+            state_transition_id=transition.id,
+            scene_id=w.scene.id,
+            severity="error",
+            code="rule_violation",
+            message="m",
+            details={"evidence": []},
         )  # fmt: skip
     )
     db_session.flush()
@@ -429,11 +438,19 @@ def test_generating_a_draft_does_not_change_canonical_state(
         [
             draft,
             GenerationEvent(
-                story_id=w.story.id, generation_run_id=run.id, sequence=1,
-                event_type="output_received", payload={"tokens": 10}, occurred_at=NOW,
+                story_id=w.story.id,
+                generation_run_id=run.id,
+                sequence=1,
+                event_type="output_received",
+                payload={"tokens": 10},
+                occurred_at=NOW,
             ),  # fmt: skip
-            Memory(story_id=w.story.id, generation_run_id=run.id, memory_type="interpretation",
-                   content="Ana teme Beto."),
+            Memory(
+                story_id=w.story.id,
+                generation_run_id=run.id,
+                memory_type="interpretation",
+                content="Ana teme Beto.",
+            ),
             _transition(w, generation_run_id=run.id),
         ]
     )
@@ -500,8 +517,13 @@ def test_events_referenced_by_knowledge_or_applied_transitions_cannot_be_deleted
     w = make_world()
     db_session.add(
         CharacterKnowledge(
-            story_id=w.story.id, character_id=w.character.id, fact_id=w.fact.id, known_at=NOW,
-            confidence=0.5, visibility="known", source_event_id=w.event.id,
+            story_id=w.story.id,
+            character_id=w.character.id,
+            fact_id=w.fact.id,
+            known_at=NOW,
+            confidence=0.5,
+            visibility="known",
+            source_event_id=w.event.id,
         )  # fmt: skip
     )
     db_session.flush()

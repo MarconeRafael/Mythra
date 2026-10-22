@@ -54,7 +54,7 @@ O Compose inicia PostgreSQL e API; a API executa `alembic upgrade head` antes de
 
 ## Migrations
 
-Alembic é a única ferramenta de alteração estrutural do banco. O esquema (revisões `0001` a `0009`) e o fluxo de propostas de transição estão descritos em [docs/architecture/data-model.md](docs/architecture/data-model.md). Com `MYTHRA_DATABASE_URL` configurada:
+Alembic é a única ferramenta de alteração estrutural do banco. O esquema (revisões `0001` a `0010`) e o fluxo de propostas de transição estão descritos em [docs/architecture/data-model.md](docs/architecture/data-model.md). Com `MYTHRA_DATABASE_URL` configurada:
 
 ```powershell
 alembic upgrade head
@@ -98,7 +98,7 @@ Implementado:
 
 - **Story State**: snapshot tipado e imutável do estado canônico atual (`MythraUseCases.get_story_state`), montado na camada de aplicação a partir das tabelas normalizadas. Não há tabela, JSON, cache ou endpoint HTTP de estado agregado, e o snapshot não contém histórico; `StoryEvent` continua sendo consultado separadamente (`list_story_events`).
 - **Transições de estado** com rotas `PATCH` estreitas para Character, CharacterRelationship (`trust`, `status`), CharacterKnowledge (`known_at`, `confidence`, `visibility`), StoryFact, TimelineEvent, PlotThread, StoryArc e Chapter. A criação canônica de fatos continua em `POST /stories/{story_id}/facts`. Identidade e vínculos de história não são editáveis.
-- **Eventos**: cada transição efetiva grava exatamente um `StoryEvent` na mesma transação: `character_state_updated`, `relationship_updated`, `character_knowledge_updated`, `canonical_fact_created`, `canonical_fact_updated`, `timeline_event_updated`, `plot_thread_updated`, `story_arc_updated` e `chapter_updated`. O payload contém apenas campos realmente alterados: `{"changes": {"campo": {"before": ..., "after": ...}}}`; na criação, `before` é `null` e campos nulos são omitidos.
+- **Eventos**: cada criação ou transição canônica efetiva grava exatamente um `StoryEvent` na mesma transação da mudança de estado e do incremento de `state_version`. O evento registra `sequence`, `source` (`user`, `system` ou `generation`), `operation` e o payload `{"changes": {"campo": {"before": ..., "after": ...}}}`, apenas com campos realmente alterados; na criação, `before` é `null` e campos nulos são omitidos. O log é imutável no banco (triggers rejeitam `UPDATE`, `DELETE` e `TRUNCATE`; só a exclusão em cascata da própria história é permitida). Há casos de uso de consulta de histórico e reconstrução estrita de relações, sem rotas HTTP; detalhes, limitações e o procedimento administrativo em [docs/architecture/data-model.md](docs/architecture/data-model.md), seção 15.
 - **PATCH idempotente**: sem mudança efetiva, retorna o recurso atual sem escrita nem evento. Transições rejeitadas não alteram estado nem geram evento.
 - **Transação**: a fronteira de caso de uso (`application/transactions.py`) é a única que faz commit/rollback; repositories apenas adicionam e fazem flush.
 

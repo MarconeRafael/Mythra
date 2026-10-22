@@ -52,7 +52,9 @@ def _approved(use_cases: MythraUseCases, w: World, **overrides: Any) -> StateTra
 
 def _events(session: Session, w: World, event_type: str) -> list[StoryEvent]:
     query = select(StoryEvent).where(
-        StoryEvent.story_id == w.story.id, StoryEvent.event_type == event_type
+        StoryEvent.story_id == w.story.id,
+        StoryEvent.event_type == event_type,
+        StoryEvent.id != w.event.id,  # evento de sementes da fábrica de histórias
     )
     return list(session.scalars(query))
 

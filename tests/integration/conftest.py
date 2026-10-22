@@ -116,18 +116,24 @@ def alembic_config(postgres_url: str) -> Config:
     return config
 
 
+def build_use_cases(session: Session) -> MythraUseCases:
+    """Casos de uso reais sobre uma sessão; cada chamada cria repositories próprios."""
+    return MythraUseCases(
+        users=UserRepository(session),
+        stories=StoryRepository(session),
+        characters=CharacterRepository(session),
+        narratives=NarrativeRepository(session),
+        events=StoryEventRepository(session),
+        unit_of_work=SqlAlchemyUnitOfWork(session),
+        state_transitions=StateTransitionRepository(session),
+        history=StoryEventRepository(session),
+    )
+
+
 @pytest.fixture
 def use_cases(db_session: Session) -> MythraUseCases:
     """Casos de uso reais sobre a sessão transacional do teste."""
-    return MythraUseCases(
-        users=UserRepository(db_session),
-        stories=StoryRepository(db_session),
-        characters=CharacterRepository(db_session),
-        narratives=NarrativeRepository(db_session),
-        events=StoryEventRepository(db_session),
-        unit_of_work=SqlAlchemyUnitOfWork(db_session),
-        state_transitions=StateTransitionRepository(db_session),
-    )
+    return build_use_cases(db_session)
 
 
 @dataclass
@@ -162,16 +168,19 @@ def make_world(db_session: Session) -> Callable[[], World]:
         db_session.add(story)
         db_session.flush()
         sid = story.id
-        character = Character(story_id=sid, name="Ana", emotional_state="calma")
+        character_id = uuid4()
+        character = Character(id=character_id, story_id=sid, name="Ana", emotional_state="calma")
         other = Character(story_id=sid, name="Beto")
         fact = StoryFact(
             story_id=sid, subject="a", predicate="b", object="c", valid_from=now, source="s"
         )
         event = StoryEvent(
             story_id=sid,
-            event_type="seed",
+            event_type="character_state_updated",
             aggregate_type="character",
-            aggregate_id=uuid4(),
+            aggregate_id=character_id,
+            source="generation",
+            operation="apply_transition",
             payload={},
             occurred_at=now,
         )
@@ -184,14 +193,13 @@ def make_world(db_session: Session) -> Callable[[], World]:
         )
         db_session.add_all([character, other, fact, event, arc, timeline, thread, location, run])
         db_session.flush()
-        chapter = Chapter(
-            story_id=sid, arc_id=arc.id, title="Cap", position=1, status="draft"
-        )
+        chapter = Chapter(story_id=sid, arc_id=arc.id, title="Cap", position=1, status="draft")
         db_session.add(chapter)
         db_session.flush()
         scene = Scene(story_id=sid, chapter_id=chapter.id, position=1, status="draft")
         db_session.add(scene)
         db_session.flush()
+        db_session.commit()  # libera o savepoint: rollbacks de casos de uso não desfazem a fábrica
         return World(
             user, story, character, other, fact, event, arc, chapter, timeline, thread,
             location, scene, run,

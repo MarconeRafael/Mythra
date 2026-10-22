@@ -25,7 +25,7 @@ Immutable Event Log
 ```
 
 - **Current State**: cada entidade narrativa (`Story`, `Character`, `CharacterRelationship`, `StoryArc`, `Chapter`, `TimelineEvent`, `PlotThread`, etc.) é persistida em sua própria tabela relacional e representa o estado **atual**. Atualizações substituem o valor corrente (via `updated_at`), sem manter histórico de versões anteriores na própria tabela.
-- **Immutable Event Log**: `StoryEvent` é append-only e registra o histórico de acontecimentos relevantes (na Fase 02, os tipos `character_state_updated`, `relationship_updated`, `canonical_fact_created` etc. descritos abaixo; eventos de criação das demais entidades não são emitidos automaticamente). Eventos nunca são atualizados ou apagados pela API normal. `payload` usa JSONB por ser um registro histórico com dados variáveis.
+- **Immutable Event Log**: `StoryEvent` é append-only e registra o histórico de acontecimentos relevantes. Desde a Fase 4, toda criação e atualização canônica dos casos de uso existentes emite um evento (com `sequence`, `source` e `operation`) na mesma transação da mudança de estado; locations, factions, regras, cenas e memórias ainda não emitem eventos por não terem casos de uso. Eventos não são atualizados nem apagados: triggers do PostgreSQL rejeitam `UPDATE`, `DELETE` e `TRUNCATE` (só a exclusão em cascata da história é permitida). `payload` usa JSONB por ser um registro histórico com dados variáveis. Ver a seção 15 de `data-model.md`.
 
 Isso é implementado na Fase 01. O estado atual nunca é derivado apenas do log de eventos — ele é persistido diretamente nas entidades, e o log serve como histórico auditável, não como fonte única de verdade.
 

@@ -50,6 +50,8 @@ def _fact_event(db_session: Session, story: Story) -> tuple[StoryFact, StoryEven
         event_type="knowledge_registered",
         aggregate_type="character",
         aggregate_id=uuid4(),
+        source="system",
+        operation="test_fixture",
         payload={},
         occurred_at=now,
     )
@@ -71,16 +73,12 @@ def test_phase_one_entity_creation_flow(client: TestClient) -> None:
     assert story.status_code == 201
     story_id = story.json()["id"]
 
-    preferences = client.post(
-        f"/stories/{story_id}/preferences", json={"tone": "mythic"}
-    )
+    preferences = client.post(f"/stories/{story_id}/preferences", json={"tone": "mythic"})
     assert preferences.status_code == 201
     first_character = client.post(
         f"/stories/{story_id}/characters", json={"name": "Ariadne", "age": 24}
     )
-    second_character = client.post(
-        f"/stories/{story_id}/characters", json={"name": "Theseus"}
-    )
+    second_character = client.post(f"/stories/{story_id}/characters", json={"name": "Theseus"})
     assert first_character.status_code == second_character.status_code == 201
 
     event = client.post(
@@ -130,14 +128,20 @@ def test_phase_one_entity_creation_flow(client: TestClient) -> None:
     )
     assert relationship.status_code == 201
 
-    assert client.post(
-        f"/stories/{story_id}/timeline-events",
-        json={"title": "Departure", "occurred_at": datetime.now(UTC).isoformat()},
-    ).status_code == 201
-    assert client.post(
-        f"/stories/{story_id}/plot-threads",
-        json={"title": "The return", "status": "open"},
-    ).status_code == 201
+    assert (
+        client.post(
+            f"/stories/{story_id}/timeline-events",
+            json={"title": "Departure", "occurred_at": datetime.now(UTC).isoformat()},
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            f"/stories/{story_id}/plot-threads",
+            json={"title": "The return", "status": "open"},
+        ).status_code
+        == 201
+    )
     arc = client.post(
         f"/stories/{story_id}/arcs", json={"title": "Exile", "position": 1, "status": "active"}
     )
@@ -147,7 +151,9 @@ def test_phase_one_entity_creation_flow(client: TestClient) -> None:
         json={"arc_id": arc.json()["id"], "title": "The road", "position": 1, "status": "draft"},
     )
     assert chapter.status_code == 201
-    assert client.get(f"/stories/{story_id}/events").json()[0]["event_type"] == "character_created"
+    event_types = [e["event_type"] for e in client.get(f"/stories/{story_id}/events").json()]
+    assert event_types[0] == "story_created"
+    assert event_types.count("character_created") == 3  # duas automáticas e uma manual
 
 
 def test_database_check_constraint_rejects_invalid_trust(db_session: Session) -> None:
@@ -253,6 +259,8 @@ def test_database_rejects_knowledge_that_crosses_story_boundaries(db_session: Se
         event_type="knowledge_registered",
         aggregate_type="character",
         aggregate_id=character.id,
+        source="system",
+        operation="test_fixture",
         payload={},
         occurred_at=datetime.now(UTC),
     )

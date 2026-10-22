@@ -332,13 +332,17 @@ class PlotThread(TimestampMixin, Base):
 
 
 class StoryEvent(IdCreatedMixin, Base):
-    """Registro histórico append-only dos acontecimentos relevantes."""
+    """Registro histórico append-only; triggers do PostgreSQL impedem UPDATE e DELETE (0010)."""
 
     __tablename__ = "story_events"
     __table_args__ = (
         UniqueConstraint("story_id", "id", name="uq_story_events_story_id_id"),
         UniqueConstraint("sequence", name="uq_story_events_sequence"),
+        CheckConstraint(
+            "source IN ('user', 'system', 'generation')", name="ck_story_events_source"
+        ),
         Index("ix_story_events_story_occurred_at", "story_id", "occurred_at"),
+        Index("ix_story_events_story_id_sequence", "story_id", "sequence"),
         Index(
             "ix_story_events_aggregate_history",
             "story_id",
@@ -355,5 +359,7 @@ class StoryEvent(IdCreatedMixin, Base):
     event_type: Mapped[str] = mapped_column(String(200), nullable=False)
     aggregate_type: Mapped[str] = mapped_column(String(100), nullable=False)
     aggregate_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False)
+    operation: Mapped[str] = mapped_column(String(100), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

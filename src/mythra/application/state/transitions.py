@@ -18,6 +18,8 @@ from mythra.application.events.transitions import (
     CHARACTER_STATE_UPDATED,
     PLOT_THREAD_UPDATED,
     RELATIONSHIP_UPDATED,
+    SOURCE_GENERATION,
+    SOURCE_USER,
     STORY_ARC_UPDATED,
     TIMELINE_EVENT_UPDATED,
     TransitionRecorder,
@@ -44,6 +46,7 @@ EVENT_TYPES: dict[tuple[str, str], str] = {
     ("chapter", "update"): CHAPTER_UPDATED,
 }
 _DATETIME_FIELDS = frozenset({"known_at", "valid_from", "valid_to", "occurred_at"})
+APPLY_OPERATION = "apply_transition"
 _FACT_REQUIRED_FIELDS = ("subject", "predicate", "object", "valid_from", "source")
 
 
@@ -191,22 +194,28 @@ class StateTransitionUseCases:
             raise ConflictError("Somente transições aprovadas podem ser aplicadas.")
         body = _changes_of(transition.changes)
         after = {field: _from_json(field, change["after"]) for field, change in body.items()}
+        source = SOURCE_GENERATION if transition.generation_run_id is not None else SOURCE_USER
         if transition.operation == "update":
             resolver = self._resolvers[transition.aggregate_type]
             target = resolver(story_id, transition.aggregate_id)
             if target.event_type != transition.event_type:
                 raise DomainRuleViolation("Tipo de evento incompatível com o agregado.")
+            self.recorder.versions.refresh(target.record)
             for field, change in body.items():
                 if json_value(getattr(target.record, field)) != change["before"]:
                     raise StaleTransitionError([transition_id])
             staged = self.recorder.stage_update(
-                story_id=story_id, updates=after, **target.as_kwargs()
+                story_id=story_id,
+                updates=after,
+                **{**target.as_kwargs(), "operation": APPLY_OPERATION, "source": source},
             )
             if staged is None:
                 raise DomainRuleViolation("A transição não produz mudança efetiva.")
             aggregate_id = transition.aggregate_id
         else:
-            staged = self.characters.stage_fact_creation(story_id, after)
+            staged = self.characters.stage_fact_creation(
+                story_id, after, operation=APPLY_OPERATION, source=source
+            )
             aggregate_id = staged.record.id
         changed = self.transitions.change_status(
             story_id=story_id,

@@ -4,12 +4,12 @@
 
 ## 1. Escopo e princípios
 
-**Escopo.** Este documento (a) descreve o modelo relacional **já implementado** (migration `0001_initial`, commit `bc560a9`, Fases 01 e 02) e (b) especifica as tabelas que foram acrescentadas pelas migrations `0002`–`0009`. A seção 14 registra o que foi efetivamente implementado e verificado, e os desvios em relação à proposta original; as seções 2–13 mantêm o desenho original como referência arquitetural. A seção 3 descreve o estado **antes** das migrations `0002`+.
+**Escopo.** Este documento (a) descreve o modelo relacional **já implementado** (migration `0001_initial`, commit `bc560a9`, Fases 01 e 02) e (b) especifica as tabelas que foram acrescentadas pelas migrations `0002`–`0009`. A seção 14 registra o que foi efetivamente implementado e verificado, e os desvios em relação à proposta original; as seções 2–13 mantêm o desenho original como referência arquitetural. A seção 3 descreve o estado **antes** das migrations `0002`+. A seção 15 descreve o modelo híbrido estado atual + log imutável (migration `0010`, Fase 4).
 
 **Princípios (herdados das decisões da Fase 01/02 e mantidos).**
 
 1. **Estado atual em tabelas relacionais normalizadas.** Não há documento JSON com a história inteira.
-2. **Histórico append-only separado** (`story_events`), sem Event Sourcing completo: o estado nunca é reconstruído a partir do log.
+2. **Histórico append-only separado** (`story_events`), sem Event Sourcing completo: o estado atual vive nas tabelas relacionais (fonte da verdade) e nunca é lido do log. O log permite apenas consultar o histórico e reconstruir de forma estrita uma entidade (hoje, relações) para auditoria; ver a seção 15.
 3. **A LLM nunca é autoridade.** Geração só escreve rascunhos e *propostas*; o estado canônico muda somente por transição aprovada, aplicada por um caso de uso transacional.
 4. **Isolamento por história.** Toda linha pertence a uma história (`story_id`); referências entre linhas de entidades diferentes usam FK composta `(story_id, id)`, de modo que cruzar histórias é impossível no próprio banco. O proprietário é derivado por `stories.user_id`; `user_id` não é duplicado nas tabelas filhas.
 5. **Constraints no banco, não só na aplicação**, mas sem impedir mudanças narrativas legítimas (ex.: posições reordenáveis, status livres onde não há vocabulário definido).
@@ -75,12 +75,12 @@ Todas têm `id uuid PK`, `created_at timestamptz` e (exceto `story_events`) `upd
 | `chapters` | `story_id`, `arc_id`, `title`, `position int`, `summary`, `content`, `status varchar(100)` | `(story_id, arc_id) → story_arcs(story_id,id)` CASCADE | `ix (story_id, arc_id, position)` (não único); **sem** `uq (story_id,id)` |
 | `timeline_events` | `story_id`, `title`, `description`, `occurred_at timestamptz` | `story_id → stories` CASCADE | `ix (story_id, occurred_at)`; **sem** `uq (story_id,id)` |
 | `plot_threads` | `story_id`, `title`, `description`, `status varchar(20)` | `story_id → stories` CASCADE | `CHECK status IN ('open','resolved','abandoned')`; `ix (story_id)`; **sem** `uq (story_id,id)` |
-| `story_events` | `story_id`, `event_type varchar(200)`, `aggregate_type varchar(100)`, `aggregate_id uuid`, `payload jsonb`, `occurred_at` | `story_id → stories` CASCADE | `uq (story_id,id)`, `ix (story_id, occurred_at)`; imutável por ausência de rotas de update/delete |
+| `story_events` | `story_id`, `event_type varchar(200)`, `aggregate_type varchar(100)`, `aggregate_id uuid`, `payload jsonb`, `occurred_at` | `story_id → stories` CASCADE | `uq (story_id,id)`, `ix (story_id, occurred_at)`. Estado de `0001`; a `0002` acrescentou `sequence` e índice por agregado e a `0010` acrescentou `source`, `operation` e triggers de imutabilidade (seção 15) |
 
 ### 3.2 Como Fase 02 usa o modelo
 
 - **Estado atual** = linhas das tabelas acima. O Story State (`get_story_state`) é um snapshot tipado montado em memória; não há tabela `story_state`.
-- **Histórico** = `story_events`. Cada transição efetiva grava exatamente um evento na mesma transação da mudança (`character_state_updated`, `relationship_updated`, `character_knowledge_updated`, `canonical_fact_created`, `canonical_fact_updated`, `timeline_event_updated`, `plot_thread_updated`, `story_arc_updated`, `chapter_updated`). `aggregate_type` ∈ `character`, `relationship`, `character_knowledge`, `story_fact`, `timeline_event`, `plot_thread`, `story_arc`, `chapter`. Payload: `{"changes": {campo: {"before": ..., "after": ...}}}` apenas com campos realmente alterados.
+- **Histórico** = `story_events`. Cada transição efetiva grava exatamente um evento na mesma transação da mudança (na Fase 02: `character_state_updated`, `relationship_updated`, `character_knowledge_updated`, `canonical_fact_created`, `canonical_fact_updated`, `timeline_event_updated`, `plot_thread_updated`, `story_arc_updated`, `chapter_updated`; a Fase 4 passou a registrar também as criações, ver seção 15). `aggregate_type` ∈ `character`, `relationship`, `character_knowledge`, `story_fact`, `timeline_event`, `plot_thread`, `story_arc`, `chapter`. Payload: `{"changes": {campo: {"before": ..., "after": ...}}}` apenas com campos realmente alterados.
 - **Fronteira transacional:** `application/transactions.py`; repositories só fazem `add`/`flush`.
 
 ### 3.3 Lacunas e riscos encontrados no modelo atual
@@ -93,8 +93,8 @@ Marcados como **verificado no código** ou **análise (não executado)**.
 | L2 | `fk_knowledge_event_same_story` usa `ON DELETE RESTRICT`. `RESTRICT` não é adiável e é verificado imediatamente. | executado na implementação | A exclusão em cascata de uma história com conhecimento **funcionou** no PostgreSQL 16 (a ordem das cascatas no `0001` a favorece), então o risco não se manifestou; ainda assim depende da ordem de criação das constraints. A migration `0002` troca a ação para `NO ACTION` (verificada ao fim do comando), tornando-a independente de ordem; excluir um evento referenciado continua sendo rejeitado. |
 | L3 | `position` de arcos/capítulos não é único. | verificado | Intencional na Fase 01 (permite reordenar). Proposta: unicidade `DEFERRABLE INITIALLY DEFERRED` (seção 6), condicionada a limpeza de dados. |
 | L4 | `character_relationships` só tem índice composto iniciando por `(story_id, source_character_id, …)`. | verificado | Consultas "relações em que a personagem é *alvo*" não usam índice; ver seção 7. |
-| L5 | Imutabilidade de `story_events` só existe por ausência de rotas. | verificado | Endurecimento opcional no banco (seção 9). |
-| L6 | Ordenação de eventos só por `occurred_at` (empates sem desempate). | verificado | Coluna de sequência proposta como decisão em aberto (seção 12). |
+| L5 | Imutabilidade de `story_events` só existe por ausência de rotas. | verificado | **Resolvido na `0010`**: triggers bloqueiam `UPDATE`, `DELETE` e `TRUNCATE` (seção 15). |
+| L6 | Ordenação de eventos só por `occurred_at` (empates sem desempate). | verificado | **Resolvido**: `sequence` (migration `0002`); consultas ordenam por `sequence` (seção 15). |
 | L7 | `visibility` e `relationship_type` são strings sem vocabulário; "não sabe" é representado pela **ausência** de linha em `character_knowledge`. | verificado | Mantido; vocabulário controlado é decisão em aberto. |
 | L8 | `character_knowledge.story_id` não tem FK direta para `stories` (apenas FKs compostas via personagem/fato) e não é indexada isoladamente. | verificado | Integridade preservada pelas compostas; índice `(story_id)` só se a carga por história justificar. |
 
@@ -243,6 +243,8 @@ erDiagram
         varchar event_type
         varchar aggregate_type
         uuid aggregate_id
+        varchar source
+        varchar operation
         jsonb payload
         timestamptz occurred_at
     }
@@ -559,7 +561,7 @@ PostgreSQL **não** cria índice automático para colunas de FK; toda FK usada e
 3. Achados de validação com severidade `error` bloqueiam a aprovação automática (política na aplicação; quem pode sobrescrever é decisão em aberto).
 4. Uma inferência não validada ou uma memória semântica não possuem caminho por FK para tabelas canônicas; para virarem fato precisam gerar uma `state_transition` de `canonical_fact_created`.
 5. Todo estado canônico aplicado deixa um `story_event`; ausência de evento para uma mudança é detectável por auditoria.
-6. Endurecimento opcional (suposição, não proposto como obrigatório): papel de banco da geração sem `INSERT/UPDATE/DELETE` nas tabelas canônicas, e triggers que rejeitem `UPDATE/DELETE` em `story_events`.
+6. Endurecimento: os triggers que rejeitam `UPDATE/DELETE/TRUNCATE` em `story_events` foram implementados na `0010` (seção 15). Continua sendo suposição, e não implementado, um papel de banco da geração sem `INSERT/UPDATE/DELETE` nas tabelas canônicas (o repositório não define papéis de banco).
 
 **Edições diretas via API (Fase 02).** Os `PATCH` atuais continuam sendo transições explícitas do usuário, aplicadas imediatamente com `story_event`, sem `state_transitions`. Se o usuário editar texto e a aplicação inferir mudanças canônicas, estas passam por `state_transitions` (origem `user_edit_id`).
 
@@ -642,6 +644,8 @@ Cada passo é uma migration separada, criada quando a funcionalidade que a conso
 
 Cada passo deve ser verificado com `alembic upgrade head`, `alembic check` e testes de integração das constraints antes do próximo.
 
+> **Eventos (Fase 4).** `locations`, `factions`, `scenes`, `narrative_rules` e `memories` ainda não têm casos de uso de escrita; ao implementá-los, integrá-los ao registro de `story_events` (seção 15.7).
+
 ## 14. Implementação (migrations 0002–0009) e desvios
 
 **Situação.** Implementado em SQLAlchemy e Alembic: `0002_integrity_hardening`, `0003_world_and_scenes`, `0004_narrative_rules`, `0005_generation`, `0006_user_edits`, `0007_state_transitions`, `0008_validation`, `0009_memories`. `0001_initial` não foi alterada. Os modelos novos estão em `models/world.py` (`Location`, `Faction`, `Scene`, `NarrativeRule`, `Memory`) e `models/workflow.py` (`GenerationRun`, `GenerationEvent`, `UserEdit`, `StateTransition`, `ValidationRun`, `ValidationResult`); os existentes continuam em `models/narrative.py`. A verificação executada (PostgreSQL 16 descartável) está nos testes `tests/integration/test_migrations.py`, `test_schema_integrity.py` e `test_state_transition_workflow.py`.
@@ -653,7 +657,7 @@ Cada passo deve ser verificado com `alembic upgrade head`, `alembic check` e tes
 | Sequência de eventos | Decisão em aberto nº 5 resolvida: `story_events.sequence bigint GENERATED BY DEFAULT AS IDENTITY`, com unicidade global. Linhas existentes recebem `1..n` por `(occurred_at, created_at, id)`. A listagem ordena por `(occurred_at, sequence)`. |
 | Unicidade de posições | `story_arcs (story_id, position)`, `chapters (arc_id, position)` e `scenes (chapter_id, position)` são `DEFERRABLE INITIALLY DEFERRED`. Posições duplicadas pré-existentes são renumeradas `1..n` (por posição, criação e id) apenas nos grupos afetados; a renumeração não é revertida no downgrade (avaliado como aceitável: só altera linhas que violariam a nova unicidade, cuja ordem relativa já era ambígua, e o esquema anterior não exige posições únicas; guardar as posições originais exigiria uma tabela auxiliar permanente). Consequência: duas requisições separadas não conseguem trocar posições entre si (a violação aparece no commit e vira 409); a troca atômica só é possível numa única transação. Um caso de uso de reordenação fica para uma fase futura. |
 | FK conhecimento→evento | `fk_knowledge_event_same_story` passou de `RESTRICT` para `NO ACTION` (ver L2). |
-| `state_version` | Incrementado, na mesma transação, por toda transição efetiva (`PATCH`/criação de fato da Fase 02 e `apply` de propostas). |
+| `state_version` | Incrementado, na mesma transação, por toda transição efetiva (`PATCH`/criação de fato da Fase 02 e `apply` de propostas); a Fase 4 passou a incrementá-lo também nas criações auditadas (seção 15). |
 | `chapters.revision` | Incrementado a cada atualização efetiva de capítulo e exposto em `ChapterRead.revision`. `scenes.revision` existe, mas nenhum caso de uso o incrementa ainda (não há rotas de cena). |
 | Procedência | `chapters.generation_run_id` e `scenes.generation_run_id` foram criadas na `0005` (e não na `0003`), pois dependem de `generation_runs`. |
 | Constraints adicionais em `state_transitions` | `ck_state_transitions_update_has_aggregate` (atualização exige `aggregate_id`) e `ck_state_transitions_event_only_when_applied` (evento só existe se `applied`). Índice `ix_state_transitions_aggregate`. |
@@ -664,3 +668,91 @@ Cada passo deve ser verificado com `alembic upgrade head`, `alembic check` e tes
 **Fluxo de transições (aplicação).** `StateTransitionUseCases` (`application/state/transitions.py`) oferece `propose`, `decide` e `apply`. `propose` valida origem única, combinação agregado/operação/evento, formato de `changes` e campos obrigatórios de criação, e grava apenas em `state_transitions`. `decide` faz compare-and-set `proposed → approved|rejected`. `apply` trava a linha de `stories` (`FOR UPDATE`), confere `expected_state_version` (opcional) e os valores `before` de cada campo, delega a gravação ao mesmo `TransitionRecorder` da Fase 02 (sem commit próprio), grava um `story_event` por transição, marca `applied` com `applied_story_event_id` e incrementa `state_version`, tudo numa só transação. Se o estado mudou, as propostas afetadas ficam `stale` (em transação separada) e a exceção `StaleTransitionError` é levantada. Suporta atualização dos oito agregados da Fase 02 e criação de `story_fact`; outras criações não têm evento definido e são rejeitadas. Não há rotas HTTP para esse fluxo.
 
 **Não implementado (permanece como decisão em aberto/candidato).** Nenhuma das tabelas novas tem rotas HTTP, inclusive o fluxo de transições (`propose`/`decide`/`apply`), que existe apenas como casos de uso na camada de aplicação (facade `MythraUseCases`); também não há casos de uso de geração, validação, edição de cena com lock otimista (`base_revision`) nem de reordenação. Candidatos/decisões em aberto: `faction_memberships`, `scene_participants`, `characters.current_location_id`, `memory_embeddings`, `chapter_versions`; vocabulários controlados de status; autoria em `story_events`; endurecimento por papéis/triggers.
+
+## 15. Fase 4: estado atual + log de eventos imutável (migration 0010)
+
+**Modelo híbrido.** O **estado atual** continua nas tabelas relacionais (fonte da verdade, lida por toda a API). O **histórico** é `story_events`: uma única tabela append-only, sem segunda tabela de eventos e sem Event Sourcing completo (o estado atual nunca é derivado do log; o log só serve a auditoria e à reconstrução histórica estrita). Cada mudança canônica efetiva grava, na **mesma transação**, a mudança de estado, o evento e o incremento de `stories.state_version`.
+
+### 15.1 Esquema do evento
+
+| Coluna | Significado |
+|---|---|
+| `id`, `created_at` | Identificador (uuid4) e instante de gravação. |
+| `story_id` | História dona do evento (FK composta `(story_id, id)` permanece). Eventos de criação de história usam o próprio `id` da história. |
+| `sequence` | `bigint GENERATED BY DEFAULT AS IDENTITY`, única globalmente; é a ordem canônica de leitura e do replay. |
+| `event_type`, `aggregate_type`, `aggregate_id` | O que mudou e em qual entidade. |
+| `source` | Origem: `user`, `system` ou `generation` (`CHECK`). Eventos anteriores à `0010` foram preenchidos com `user`: todos nasceram de chamadas à API. |
+| `operation` | Operação de aplicação que produziu o evento (tabela abaixo). Eventos anteriores receberam a operação equivalente ao `event_type`; os manuais ficam com `record_story_event`. |
+| `payload` | `{"changes": {campo: {"before": ..., "after": ...}}}`, somente campos efetivamente alterados; campos nulos na criação são omitidos e, na criação, `before` é `null`. |
+| `occurred_at` | Instante do fato. |
+
+Índice novo: `ix_story_events_story_id_sequence (story_id, sequence)`.
+
+**Operações que produzem eventos** (um por operação efetiva; sem mudança efetiva não há escrita, evento nem incremento de `state_version`):
+
+| `operation` | `event_type` | `aggregate_type` |
+|---|---|---|
+| `create_story` / `update_story` | `story_created` / `story_updated` | `story` |
+| `create_preferences` | `story_preferences_created` | `story_preferences` |
+| `create_character` / `update_character` | `character_created` / `character_state_updated` | `character` |
+| `create_relationship` / `update_relationship` | `relationship_created` / `relationship_updated` | `relationship` |
+| `create_knowledge` / `update_knowledge` | `character_knowledge_created` / `character_knowledge_updated` | `character_knowledge` |
+| `create_fact` / `update_fact` | `canonical_fact_created` / `canonical_fact_updated` | `story_fact` |
+| `create_timeline_event` / `update_timeline_event` | `timeline_event_created` / `timeline_event_updated` | `timeline_event` |
+| `create_plot_thread` / `update_plot_thread` | `plot_thread_created` / `plot_thread_updated` | `plot_thread` |
+| `create_arc` / `update_arc` | `story_arc_created` / `story_arc_updated` | `story_arc` |
+| `create_chapter` / `update_chapter` | `chapter_created` / `chapter_updated` | `chapter` |
+| `record_story_event` | livre (rota manual existente) | livre |
+| `apply_transition` | o `event_type` da proposta aplicada (atualização dos oito agregados da Fase 02) ou `canonical_fact_created` | o agregado da proposta |
+
+Aplicar uma `state_transition` não gera um segundo evento: `apply` delega ao mesmo `TransitionRecorder` (com `operation = apply_transition`) e grava `applied_story_event_id` na proposta (`source = generation` se há `generation_run_id`, senão `user`). A cobertura de eventos por entidade, inclusive as cinco entidades ainda sem casos de uso de escrita, está na seção 15.7.
+
+### 15.2 Atomicidade, concorrência e idempotência
+
+- Toda escrita roda em `transaction(unit_of_work)`: se o evento, a mudança ou o `state_version` falham, tudo sofre rollback junto (testado com falha injetada na inserção do evento).
+- O `TransitionRecorder` trava a linha de `stories` (`SELECT ... FOR UPDATE`), **relê** o registro sob o lock e recalcula as mudanças efetivas. Duas requisições concorrentes com o mesmo valor produzem um único evento (a segunda vira no-op); com valores diferentes, são serializadas e o `before` do segundo evento é o `after` do primeiro. Repetir uma requisição idempotente não gera evento duplicado.
+- `stories.state_version` aumenta em 1 por mudança efetiva (inclusive criações de entidades filhas).
+
+### 15.3 Imutabilidade
+
+- Trigger `trg_story_events_append_only` (`BEFORE UPDATE OR DELETE`, por linha) e `trg_story_events_no_truncate` (`BEFORE TRUNCATE`) chamam `story_events_forbid_mutation()`, que levanta `integrity_constraint_violation`. O único `DELETE` permitido é o da cascata de `DELETE` da própria história (a função verifica que a história já não existe); portanto apagar uma história remove seu histórico. Isso vale para qualquer cliente, não só para a aplicação.
+- Trigger `trg_state_transitions_applied_event` valida que o evento referenciado por `applied_story_event_id` pertence à mesma história e tem `event_type`, `aggregate_type`, `aggregate_id` e `source` coerentes com a transição.
+- **Limites (verificado/analisado).** `TRUNCATE` direto é rejeitado pelo trigger; `TRUNCATE ... CASCADE` e `TRUNCATE` de tabela referenciada por FK são rejeitados pelo próprio PostgreSQL ou pelo trigger. Superusuário ou dono da tabela pode desabilitar triggers; isso é um *override* administrativo consciente, não acidental: `ALTER TABLE story_events DISABLE TRIGGER trg_story_events_append_only;` (e reabilitar com `ENABLE TRIGGER` ao terminar, registrando o motivo). Recomenda-se que o papel de aplicação não seja dono da tabela e tenha `REVOKE UPDATE, DELETE, TRUNCATE ON story_events`; o repositório não define papéis de banco, então essa camada de permissões **não está implementada** aqui.
+
+### 15.4 Consulta e reconstrução
+
+Casos de uso somente leitura em `application/history/use_cases.py` (`StoryHistoryUseCases`, também na facade `MythraUseCases`); não há rotas HTTP novas.
+
+| Necessidade | Método |
+|---|---|
+| Eventos da história, em ordem de `sequence`, com filtros (`event_type`, `aggregate_type`, `aggregate_id`, `source`, `after_sequence`, `up_to_sequence`, `limit`) | `list_events` |
+| Histórico de um personagem (o próprio, suas relações e seus conhecimentos) | `list_character_events` |
+| Histórico de uma relação | `list_events(aggregate_type="relationship", aggregate_id=...)` |
+| Antes/depois | `payload["changes"][campo]["before" / "after"]` |
+| Qual evento originou uma mudança aplicada por proposta | `get_event_for_transition` (via `applied_story_event_id`); `StoryEventRecord` também expõe `state_transition_id` e `generation_run_id` |
+| Reconstruir uma relação até uma sequência | `reconstruct_relationship(story_id, relationship_id, up_to_sequence=..., initial_state=..., verify_current=...)` |
+
+O replay (`domain/events/reconstruction.py`) é estrito e **falha com `HistoryReconstructionError`** diante de: nenhum evento; atualização sem criação nem `initial_state`; criação duplicada ou com `before` não nulo; criação sem campos obrigatórios; `before` diferente do estado reconstruído (lacuna ou evento adulterado); campo não atualizável; payload sem `changes`; sequência fora de ordem; estado final que viole as regras de domínio da relação. Eventos manuais (`record_story_event`) não entram no replay. Com `verify_current=True` o resultado é comparado com a linha atual e uma divergência (mudança sem evento) também é erro.
+
+### 15.5 Migração dos dados existentes
+
+`0010_event_log_hardening` é incremental: adiciona `source` e `operation` anuláveis, preenche (`source='user'`; `operation` pelo mapeamento do `event_type`, `record_story_event` para os demais), torna-as `NOT NULL`, cria o `CHECK` e o índice, e só então instala os triggers. O downgrade remove triggers, funções, índice, `CHECK` e colunas (os valores de origem/operação são descartados). Verificado com dados existentes nos testes de migração.
+
+### 15.6 Limitações
+
+- Reconstrução apenas de relações; as demais entidades têm eventos no mesmo formato, mas sem especificação de replay.
+- Entidades criadas antes da Fase 4 não têm evento de criação: a reconstrução exige `initial_state`.
+- Não há eventos de exclusão (não existe exclusão de entidades) e a exclusão de uma história apaga seu histórico.
+- A imutabilidade depende de triggers; sem separação de papéis de banco, um superusuário/dono pode contorná-los (seção 15.3).
+- Sem rotas HTTP de histórico/reconstrução e sem eventos para entidades sem casos de uso de escrita (seção 15.7).
+- `StoryEventRepository.list_for_story` (usado por `GET .../events`) continua ordenando por `(occurred_at, sequence)`; a ordem canônica do histórico e do replay é `sequence` (`StoryHistoryUseCases`).
+
+### 15.7 Cobertura de eventos por entidade
+
+Auditoria dos fluxos de escrita existentes (casos de uso e rotas; verificada no código e nos testes de `test_event_log.py` e `test_state_transitions.py`).
+
+**A. Entidades com caso de uso de escrita: todas auditadas.** Cada criação e cada atualização efetiva de `stories`, `story_preferences`, `characters`, `character_relationships`, `character_knowledge`, `story_facts`, `timeline_events`, `plot_threads`, `story_arcs` e `chapters` passa por `TransitionRecorder` e grava o evento, o estado e o `state_version` na mesma transação; atualizações sem mudança efetiva não escrevem nada. Aplicar propostas reutiliza o mesmo caminho, sem evento duplicado. Não foi encontrada lacuna nesses fluxos. Exceções deliberadas, que não são estado canônico de história: `users` (não pertence a uma história, e `story_events.story_id` é obrigatório); `state_transitions` (o ciclo propor/decidir/marcar `stale` é fluxo de trabalho; só a aplicação gera evento); o aumento de `chapters.revision` (derivado da atualização, não aparece no `payload`); e a anotação manual `record_story_event`, que é em si um evento.
+
+**B. Entidades sem caso de uso de escrita: `locations`, `factions`, `scenes`, `narrative_rules` e `memories`.** Existem apenas como modelo e tabela (migrations `0003`, `0004` e `0009`); não há repositório, caso de uso nem rota que as escreva. Portanto não há operação de escrita existente que deveria gerar evento e não gera: a lacuna é de funcionalidade futura, não de auditoria. Não se registram eventos artificiais para elas.
+
+**C. Roadmap.** Quando os casos de uso de escrita dessas cinco entidades forem implementados, eles devem integrar o registro de eventos: usar `TransitionRecorder` (`create`/`update`, ou `stage_*` dentro de transação maior), definir `event_type`, `aggregate_type` e `operation` próprios, registrar `before`/`after` efetivos, incrementar `state_version` e ter testes de atomicidade, no-op e rollback como os da seção 15.1. `memories` é semântica e não altera estado canônico; se for tratada como não canônica, a decisão de não emitir evento deve ser registrada nesse momento. Enquanto isso não ocorrer, as cinco continuam fora do log.

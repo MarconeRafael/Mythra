@@ -7,15 +7,18 @@ from mythra.application.characters.ports import CharacterStore
 from mythra.application.events.transitions import (
     CANONICAL_FACT_CREATED,
     CANONICAL_FACT_UPDATED,
+    CHARACTER_CREATED,
+    CHARACTER_KNOWLEDGE_CREATED,
     CHARACTER_KNOWLEDGE_UPDATED,
     CHARACTER_STATE_UPDATED,
+    RELATIONSHIP_CREATED,
     RELATIONSHIP_UPDATED,
+    SOURCE_USER,
     StagedChange,
     TransitionRecorder,
     UpdateTarget,
 )
 from mythra.application.stories.use_cases import StoryUseCases
-from mythra.application.transactions import UnitOfWork, transaction
 from mythra.core.exceptions import ResourceNotFoundError
 from mythra.domain.characters.rules import CharacterKnowledgeState, RelationshipState
 
@@ -32,17 +35,21 @@ class CharacterUseCases:
         characters: CharacterStore,
         stories: StoryUseCases,
         transitions: TransitionRecorder,
-        unit_of_work: UnitOfWork,
     ) -> None:
         self.characters = characters
         self.stories = stories
         self.transitions = transitions
-        self.unit_of_work = unit_of_work
 
     def create_character(self, story_id: UUID, values: dict[str, Any]) -> Any:
         self.stories.get_story(story_id)
-        with transaction(self.unit_of_work):
-            return self.characters.create(story_id=story_id, values=values)
+        return self.transitions.create(
+            story_id=story_id,
+            values=values,
+            event_type=CHARACTER_CREATED,
+            aggregate_type="character",
+            operation="create_character",
+            persist=lambda: self.characters.create(story_id=story_id, values=values),
+        )
 
     def list_characters(self, story_id: UUID) -> list[Any]:
         self.stories.get_story(story_id)
@@ -56,29 +63,43 @@ class CharacterUseCases:
             record=character,
             event_type=CHARACTER_STATE_UPDATED,
             aggregate_type="character",
+            operation="update_character",
             persist=self.characters.update_character,
             validate=_no_extra_rules,
         )
 
-    def update_character(
-        self, story_id: UUID, character_id: UUID, updates: dict[str, Any]
-    ) -> Any:
+    def update_character(self, story_id: UUID, character_id: UUID, updates: dict[str, Any]) -> Any:
         target = self.resolve_character_update(story_id, character_id)
         return self.transitions.update(story_id=story_id, updates=updates, **target.as_kwargs())
 
     def create_fact(self, story_id: UUID, values: dict[str, Any]) -> Any:
         self.stories.get_story(story_id)
-        with transaction(self.unit_of_work):
-            return self.stage_fact_creation(story_id, values).record
+        return self.transitions.create(
+            story_id=story_id,
+            values=values,
+            event_type=CANONICAL_FACT_CREATED,
+            aggregate_type="story_fact",
+            operation="create_fact",
+            persist=lambda: self.characters.create_fact(story_id=story_id, values=values),
+        )
 
-    def stage_fact_creation(self, story_id: UUID, values: dict[str, Any]) -> StagedChange:
+    def stage_fact_creation(
+        self,
+        story_id: UUID,
+        values: dict[str, Any],
+        *,
+        operation: str = "create_fact",
+        source: str = SOURCE_USER,
+    ) -> StagedChange:
         """Cria o fato e o evento `canonical_fact_created` na transação do chamador."""
         return self.transitions.stage_create(
             story_id=story_id,
             values=values,
             event_type=CANONICAL_FACT_CREATED,
             aggregate_type="story_fact",
+            operation=operation,
             persist=lambda: self.characters.create_fact(story_id=story_id, values=values),
+            source=source,
         )
 
     def resolve_fact_update(self, story_id: UUID, fact_id: UUID) -> UpdateTarget:
@@ -89,6 +110,7 @@ class CharacterUseCases:
             record=fact,
             event_type=CANONICAL_FACT_UPDATED,
             aggregate_type="story_fact",
+            operation="update_fact",
             persist=self.characters.update_fact,
             validate=_no_extra_rules,
         )
@@ -112,8 +134,18 @@ class CharacterUseCases:
             confidence=values["confidence"],
             visibility=values["visibility"],
         )
-        with transaction(self.unit_of_work):
-            return self.characters.create_knowledge(character_id=character_id, values=values)
+        event_values = {k: v for k, v in values.items() if k != "story_id"}
+        event_values["character_id"] = character_id
+        return self.transitions.create(
+            story_id=story_id,
+            values=event_values,
+            event_type=CHARACTER_KNOWLEDGE_CREATED,
+            aggregate_type="character_knowledge",
+            operation="create_knowledge",
+            persist=lambda: self.characters.create_knowledge(
+                character_id=character_id, values=values
+            ),
+        )
 
     def resolve_knowledge_update(
         self, story_id: UUID, character_id: UUID, fact_id: UUID
@@ -148,6 +180,7 @@ class CharacterUseCases:
             record=knowledge,
             event_type=CHARACTER_KNOWLEDGE_UPDATED,
             aggregate_type="character_knowledge",
+            operation="update_knowledge",
             persist=self.characters.update_knowledge,
             validate=validate,
         )
@@ -165,8 +198,14 @@ class CharacterUseCases:
 
     def create_relationship(self, story_id: UUID, values: dict[str, Any]) -> Any:
         RelationshipState(story_id=story_id, **values)
-        with transaction(self.unit_of_work):
-            return self.characters.create_relationship(story_id=story_id, values=values)
+        return self.transitions.create(
+            story_id=story_id,
+            values=values,
+            event_type=RELATIONSHIP_CREATED,
+            aggregate_type="relationship",
+            operation="create_relationship",
+            persist=lambda: self.characters.create_relationship(story_id=story_id, values=values),
+        )
 
     def resolve_relationship_update(self, story_id: UUID, relationship_id: UUID) -> UpdateTarget:
         relationship = self.characters.get_relationship_in_story(story_id, relationship_id)
@@ -188,6 +227,7 @@ class CharacterUseCases:
             record=relationship,
             event_type=RELATIONSHIP_UPDATED,
             aggregate_type="relationship",
+            operation="update_relationship",
             persist=self.characters.update_relationship,
             validate=validate,
         )

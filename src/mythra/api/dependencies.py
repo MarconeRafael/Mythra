@@ -30,4 +30,5 @@ def get_use_cases(
         events=StoryEventRepository(session),
         unit_of_work=SqlAlchemyUnitOfWork(session),
         state_transitions=StateTransitionRepository(session),
+        history=StoryEventRepository(session),
     )

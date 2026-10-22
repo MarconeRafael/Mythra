@@ -10,9 +10,14 @@ from uuid import UUID
 
 from mythra.application.characters.ports import CharacterStore
 from mythra.application.characters.use_cases import CharacterUseCases
-from mythra.application.events.ports import StoryEventStore
+from mythra.application.events.ports import StoryEventStore, StoryHistoryStore
 from mythra.application.events.transitions import TransitionRecorder
 from mythra.application.events.use_cases import EventUseCases
+from mythra.application.history.use_cases import (
+    ReconstructedRelationship,
+    StoryEventRecord,
+    StoryHistoryUseCases,
+)
 from mythra.application.narratives.ports import NarrativeStore
 from mythra.application.narratives.use_cases import NarrativeUseCases
 from mythra.application.state.ports import StateTransitionStore
@@ -38,13 +43,15 @@ class MythraUseCases:
         events: StoryEventStore,
         unit_of_work: UnitOfWork,
         state_transitions: StateTransitionStore,
+        history: StoryHistoryStore,
     ) -> None:
         transitions = TransitionRecorder(events, stories, unit_of_work)
         self._users = UserUseCases(users, unit_of_work)
-        self._stories = StoryUseCases(stories, self._users, unit_of_work)
-        self._characters = CharacterUseCases(characters, self._stories, transitions, unit_of_work)
-        self._narratives = NarrativeUseCases(narratives, self._stories, transitions, unit_of_work)
+        self._stories = StoryUseCases(stories, self._users, transitions)
+        self._characters = CharacterUseCases(characters, self._stories, transitions)
+        self._narratives = NarrativeUseCases(narratives, self._stories, transitions)
         self._events = EventUseCases(events, self._stories, unit_of_work)
+        self._history = StoryHistoryUseCases(history, self._stories, characters)
         self._state = StoryStateUseCases(self._stories, stories, characters, narratives)
         self._state_transitions = StateTransitionUseCases(
             state_transitions,
@@ -103,9 +110,7 @@ class MythraUseCases:
     def create_character(self, story_id: UUID, values: dict[str, Any]) -> Any:
         return self._characters.create_character(story_id, values)
 
-    def update_character(
-        self, story_id: UUID, character_id: UUID, updates: dict[str, Any]
-    ) -> Any:
+    def update_character(self, story_id: UUID, character_id: UUID, updates: dict[str, Any]) -> Any:
         return self._characters.update_character(story_id, character_id, updates)
 
     def list_characters(self, story_id: UUID) -> list[Any]:
@@ -187,3 +192,19 @@ class MythraUseCases:
 
     def list_story_events(self, story_id: UUID) -> list[Any]:
         return self._events.list_story_events(story_id)
+
+    def list_event_history(self, story_id: UUID, **filters: Any) -> list[StoryEventRecord]:
+        return self._history.list_events(story_id, **filters)
+
+    def list_character_event_history(
+        self, story_id: UUID, character_id: UUID
+    ) -> list[StoryEventRecord]:
+        return self._history.list_character_events(story_id, character_id)
+
+    def get_event_for_transition(self, story_id: UUID, transition_id: UUID) -> StoryEventRecord:
+        return self._history.get_event_for_transition(story_id, transition_id)
+
+    def reconstruct_relationship(
+        self, story_id: UUID, relationship_id: UUID, **options: Any
+    ) -> ReconstructedRelationship:
+        return self._history.reconstruct_relationship(story_id, relationship_id, **options)

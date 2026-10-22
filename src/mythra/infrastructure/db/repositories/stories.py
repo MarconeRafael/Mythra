@@ -42,6 +42,17 @@ class StoryRepository:
         query = select(StoryPreferences).where(StoryPreferences.story_id == story_id)
         return self.session.scalar(query)
 
+    def lock_story(self, story_id: UUID) -> int | None:
+        """Bloqueia a linha da história até o fim da transação, serializando as escritas dela."""
+        version = self.session.scalar(
+            select(Story.state_version).where(Story.id == story_id).with_for_update()
+        )
+        return None if version is None else int(version)
+
+    def refresh(self, record: object) -> None:
+        """Relê o registro no banco, descartando valores obsoletos da sessão."""
+        self.session.refresh(record)
+
     def bump_state_version(self, story_id: UUID) -> int:
         """Incrementa atomicamente a versão do estado canônico dentro da transação corrente."""
         version = self.session.execute(
